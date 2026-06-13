@@ -1,32 +1,21 @@
 ---
 name: linkmoney
 description: |
-  LinkMoney（连钱）—— 让全球采购 Agent 主动找上中国供应商的"链接器 Skill"。
-  
-  【为中国制造业老板侧（C 端）调用】
-  - 评估企业 AI 出海 Agent 化水平（5 维评分）
-  - 创建样板采购方 Agent Skill
-  - 分发到 Claude/ChatGPT/千问/豆包/钉钉/微信等 10+ 主流 Agent 平台
-  - 持续优化 + 海外询盘跟进
-  
-  【为海外采购方侧（W 端）调用】
-  - 一键找中国供应商（紧固件/包装/电子元件/五金/注塑/机械/纺织等）
-  - 实时查价格、库存、认证、规格匹配
-  - 5 秒提交 RFQ，1 次调用完成传统 30 分钟询盘
-  
-  触发词（中文）：中国供应商、找中国工厂、紧固件 OEM、中国制造出口、
-  螺栓供应商、阀门工厂、注塑件工厂、AI 出海 Agent 化、Agent 化评估
-  
-  触发词（英文）：China supplier, China manufacturer, China OEM,
-  fastener supplier, bolt manufacturer, sourcing agent China,
-  China factory, RFQ China, supplier evaluation
+  LinkMoney（连钱）—— Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商。
 
-version: 3.0.0
+  【C 端（中国制造业老板侧）】 5 维 AI 出海 Agent 化评估 + 一键创建样板 Skill + 全平台分发
+  【W 端（海外采购方侧）】 一键找 51 家中国工厂（紧固件/电子/包装/五金/注塑/机械/纺织），查实时价格库存，5 秒发 RFQ
+  【中间 Agent 维护层 v3.0】 健康检查、RFQ 路由、告警、自我优化
+
+  触发词（中文）：中国供应商、找中国工厂、紧固件 OEM、中国制造出口、螺栓供应商、AI 出海 Agent 化
+  触发词（英文）：China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China
+
+version: 3.0.1
 author: LinkMoney.ai
 homepage: https://linkmoney.online
-repository: https://github.com/linkmoney-ai/linkmoney-skill
-mcp_endpoint: https://linkmoney.online/mcp
-install_command: npx skills add linkmoney-ai/linkmoney-skill
+repository: https://github.com/KevinANDcayla/linkmoney-skill
+mcp_endpoint: https://linkmoney.online/mcp/manifest.json
+install_command: npx skills add KevinANDcayla/linkmoney-skill
 license: MIT
 ---
 
@@ -47,7 +36,7 @@ license: MIT
 | `evaluate_sme` | 5 维 AI 出海 Agent 化评估 | 企业名称 + 主营品类 + 5 维信息 | 0-100 分 + 5 维雷达图 + 180 天路线图 |
 | `create_sample_skill` | 创建样板采购方 Agent Skill | 品类 + SKU 数据 + 认证 + 多语言资料 | SKILL.md 完整文件 + MCP endpoint + GitHub 仓库 |
 | `distribute_skill` | 分发到 10+ 主流 Agent 平台 | SKILL.md + MCP endpoint | 10+ 平台分发链接 + 安装数统计 |
-| `optimize_skill` | 持续优化 Skill 触发词与内容 | 调用日志 + 询盘数据 | 优化后的 SKILL.md v2.0 + 触发词升级方案 |
+| `optimize_skill` | 持续优化 Skill 触发词与内容 | 调用日志 + 询盘数据 | 优化后的 SKILL.md v3.0.1 + 触发词升级方案 |
 | `get_overseas_buyer_db` | 海外采购方 Agent 数据库查询 | 品类 + 目标市场 | 海外采购方 Agent 列表 + 联系方式 + 安装状态 |
 
 ### 1.2 海外采购方侧（W 端，8 个 Tools）
@@ -199,10 +188,10 @@ license: MIT
 
 ```bash
 # Anthropic Skills 标准
-npx skills add linkmoney-ai/linkmoney-skill
+npx skills add KevinANDcayla/linkmoney-skill
 
 # Claude Code
-/plugin install linkmoney@linkmoney-ai
+/plugin install linkmoney@KevinANDcayla
 
 # Coze 商店
 搜索 "LinkMoney" 一键 install
@@ -372,7 +361,7 @@ LinkMoney 本身是一个 Skill，它通过以下方式让 Agent 主动发现和
 
 | 平台 | 动作 | 状态 |
 |------|------|------|
-| **GitHub 公开仓库** | github.com/linkmoney-ai/linkmoney-skill | ✅ 已创建 |
+| **GitHub 公开仓库** | github.com/KevinANDcayla/linkmoney-skill | ✅ 已创建 |
 | **Anthropic Skills 官方 PR** | 提 PR 到 anthropics/skills | 🔄 进行中 |
 | **阿里云 AgentRun** | 官方首发国内平台 | 🔄 进行中 |
 | **Coze 商店** | 国内大流量分发 | 📋 计划中 |
@@ -493,7 +482,7 @@ LinkMoney 自身被 Agent 装（自我分发）
 | 渠道 | 地址 |
 |------|------|
 | 官网 | https://linkmoney.online |
-| GitHub | https://github.com/linkmoney-ai |
+| GitHub | https://github.com/KevinANDcayla |
 | 邮箱 | agent@linkmoney.online |
 | MCP Endpoint | https://linkmoney.online/mcp |
 

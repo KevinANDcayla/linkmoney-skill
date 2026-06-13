@@ -1,14 +1,15 @@
 {
   "name": "linkmoney",
-  "version": "2.0.0",
+  "version": "3.0.1",
   "display_name": "LinkMoney（连钱）",
-  "description": "AI Agent Marketplace for Global B2B Trade. Connect your AI agent directly to Chinese factories for sourcing, pricing, and RFQ — all in real-time.",
-  "description_zh": "Agent 时代的 B2B 贸易链接器。让海外 AI Agent 直接搜索中国工厂，查实时价格库存，自动发询盘——你只需要确认报价。",
+  "description": "AI-native B2B marketplace connecting overseas procurement agents with verified Chinese factories. First MCP Skill for agent-to-agent trade — live pricing, real-time inventory, and automated RFQ. Hybrid architecture: LinkMoney is the router + directory, factories serve live data from their own MCP servers. Unlike Alibaba (stale listings for humans), LinkMoney is built for agent-to-agent commerce.",
+  "description_zh": "Agent 时代的 B2B 贸易链接器。让海外 AI Agent 直接对接中国工厂，调用实时价格库存、查认证、自动发询盘——你只需要确认报价。",
   "author": "LinkMoney AI",
   "homepage": "https://linkmoney.online",
-  "repository": "https://github.com/linkmoney-ai/linkmoney-skill",
+  "repository": "https://github.com/KevinANDcayla/linkmoney-skill",
   "license": "MIT",
   "category": "business",
+  "subcategories": ["supply-chain", "procurement", "B2B", "import-export"],
   "tags": [
     "b2b",
     "trade",
@@ -17,48 +18,70 @@
     "manufacturing",
     "china",
     "procurement",
-    "ecommerce",
-    "import-export",
-    "factory"
+    "agent",
+    "MCP",
+    "ai",
+    "factory",
+    "RFQ"
   ],
   "mcp": {
     "manifest_url": "https://linkmoney.online/mcp/manifest.json",
-    "tools_count": 15,
+    "tools_public": 13,
+    "tools_total": 26,
+    "platform_breakdown": {
+      "public": 13,
+      "chinese": 6,
+      "internal": 7
+    },
     "authentication": "api_key",
+    "api_key_header": "X-API-Key",
     "rate_limit": "30/minute per endpoint"
   },
   "install": {
     "type": "mcp",
-    "command": "add to your AI agent's MCP settings",
+    "npx_command": "npx skills add KevinANDcayla/linkmoney-skill",
     "url": "https://linkmoney.online/mcp/manifest.json",
-    "api_key": "lm-demo-2026"
+    "api_key_request": "Contact agent@linkmoney.online for API key (free for first 3 months)"
   },
   "screenshots": [
     {
-      "url": "https://linkmoney.online/screenshots/find-supplier.png",
-      "caption": "Agent finds 3 factories with live pricing"
+      "url": "https://linkmoney.online/",
+      "caption": "Landing Page - LinkMoney v3.0"
     },
     {
-      "url": "https://linkmoney.online/screenshots/rfq-flow.png",
-      "caption": "RFQ submitted → email notification → quote"
+      "url": "https://linkmoney.online/mcp/manifest.json",
+      "caption": "MCP manifest with 13 public tools"
     }
   ],
   "pricing": {
     "model": "success_fee",
     "rate": "3%",
     "free_trial": "3 months",
-    "note": "Only pay when a deal closes. No upfront cost."
+    "no_upfront_cost": true,
+    "note": "Only pay when a deal closes. No upfront cost, no subscription."
   },
   "stats": {
-    "suppliers": 24,
+    "suppliers": 51,
     "products": 140,
     "categories": ["fastener", "electronics", "packaging", "hardware", "injection_molding", "machinery", "textile"],
-    "buyer_countries": ["US", "Germany", "Japan", "UK", "France", "UAE", "Brazil"]
+    "buyer_countries": ["US", "Germany", "Japan", "UK", "France", "UAE", "Brazil"],
+    "tools_public": 13,
+    "tools_total": 26,
+    "middle_agent_layer": true
   },
+  "key_features": [
+    "Live pricing from factory MCP servers (not 3-month-old cached listings)",
+    "Real-time inventory from factory ERP systems",
+    "Agent-to-agent commerce — no humans in the loop until negotiation",
+    "Hybrid architecture with offline fallback",
+    "Multi-language RFQ generation (8 languages)",
+    "5-dimension supplier review system",
+    "Middle Agent maintenance layer (v3.0): health check, RFQ routing, alerts, self-optimize"
+  ],
   "submission_notes": {
-    "platforms": ["clawhub", "skills.sh", "mcp.so"],
-    "why_featured": "First MCP Skill that connects AI agents to real Chinese factory ERP systems. Unlike Alibaba (human marketplace), LinkMoney is built for agent-to-agent commerce. Hybrid architecture means factories serve live data from their own MCP servers — no stale listings.",
+    "platforms": ["clawhub", "skills.sh", "mcp.so", "anthropic-skills", "alibabacloud-bailian", "coze"],
+    "why_featured": "First MCP Skill that connects AI agents to real Chinese factory ERP systems. Unlike Alibaba (human marketplace), LinkMoney is built for agent-to-agent commerce. Hybrid architecture means factories serve live data from their own MCP servers — no stale listings. v3.0 adds a Middle Agent maintenance layer for autonomous health checking, RFQ routing, and self-optimization.",
     "target_users": "Overseas procurement managers using AI agents + Chinese factory owners seeking export orders",
-    "differentiator": "Not a listing site. Not a middleware. It's an AI-native marketplace where agents do the sourcing, comparing, and RFQ — humans only confirm."
+    "differentiator": "Not a listing site. Not a middleware. An AI-native marketplace where agents do the sourcing, comparing, and RFQ — humans only confirm."
   }
 }
