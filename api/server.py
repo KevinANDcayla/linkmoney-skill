@@ -19,7 +19,7 @@ from urllib.parse import urljoin
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -1000,46 +1000,61 @@ def root():
 
 @app.get("/mcp/manifest.json")
 def mcp_manifest():
-    """MCP 协议清单，供 Agent 自动发现 tool"""
+    """
+    MCP 协议清单（分层 v3.0.1）— Agent 自动发现 tool
+    =================================================
+    `tools` 字段只列海外 Agent 实际可调的 13 个 public tool（直接 list 调用）。
+    其他 13 个为平台/中方内部使用，通过 `platform.breakdown` 透明披露：
+      - public (13)  : 海外 Agent 实际调用（你看到的 tools 字段就是这 13 个）
+      - chinese (6)   : 中方 Agent 用（evaluate_sme / register_supplier / get_my_rfqs
+                        / send_quote / bid_on_requirement / outreach_buyer）
+      - internal (7)  : LinkMoney 平台运维 Agent（agent/* 维护层）
+    """
     return {
         "name": "linkmoney",
-        "version": "3.0.0",
+        "version": "3.0.1",
         "description": "LinkMoney — 让全球采购 Agent 主动找上中国供应商的链接器 Skill（v3.0 中间 Agent 维护层）",
         "tools": [
-            # C 端（中国制造业老板侧）
-            {"name": "evaluate_sme", "description": "5 维评估中国制造业 AI 出海 Agent 化水平", "endpoint": "/evaluate_sme"},
-            # 注：create_sample_skill / distribute_skill / optimize_skill /
-            #     get_overseas_buyer_db 计划在 v3.1 补齐；当前 manifest 仅列已注册路由。
-            # W 端（海外采购方）
-            {"name": "find_china_supplier", "description": "海外采购方找中国供应商", "endpoint": "/find_china_supplier"},
-            {"name": "get_pricing", "description": "查供应商阶梯价格", "endpoint": "/get_pricing"},
-            {"name": "get_inventory", "description": "查供应商实时库存", "endpoint": "/get_inventory"},
-            {"name": "match_spec", "description": "规格匹配咨询", "endpoint": "/match_spec"},
-            {"name": "download_cert", "description": "下载供应商认证", "endpoint": "/download_cert"},
-            {"name": "multi_lang_inquiry", "description": "多语言自动询盘生成", "endpoint": "/multi_lang_inquiry"},
-            {"name": "submit_rfq", "description": "提交 RFQ", "endpoint": "/submit_rfq"},
-            {"name": "get_supplier_contact", "description": "查看供应商完整联系方式（已装Skill可见）", "endpoint": "/get_supplier_contact"},
-            {"name": "get_my_rfqs", "description": "厂商查询自己收到的 RFQ 询盘", "endpoint": "/get_my_rfqs"},
-            {"name": "send_quote", "description": "供应商对RFQ报价并邮件通知采购方", "endpoint": "/send_quote"},
-            # v2.2+ 需求广场
-            {"name": "post_requirement", "description": "海外采购方发布公开需求", "endpoint": "/post_requirement"},
-            {"name": "browse_requirements", "description": "浏览公开需求", "endpoint": "/browse_requirements"},
-            {"name": "bid_on_requirement", "description": "供应商对公开需求报价", "endpoint": "/bid_on_requirement"},
-            # v2.3+ 主动外联 + v3.0 互评
-            {"name": "outreach_buyer", "description": "供应商主动外联采购方（信任分≥60）", "endpoint": "/outreach_buyer"},
+            # ===== Public tools（海外 Agent 实际调用） =====
+            {"name": "find_china_supplier", "description": "海外采购方找中国供应商（混合架构：缓存 + 厂家 MCP 直连）", "endpoint": "/find_china_supplier"},
+            {"name": "get_pricing", "description": "查供应商阶梯报价（MOQ + 数量档位）", "endpoint": "/get_pricing"},
+            {"name": "get_inventory", "description": "查供应商实时库存（直连厂家 MCP）", "endpoint": "/get_inventory"},
+            {"name": "match_spec", "description": "规格匹配（按品类+规格+认证筛选）", "endpoint": "/match_spec"},
+            {"name": "download_cert", "description": "下载供应商认证（ISO/CE/FDA 等）", "endpoint": "/download_cert"},
+            {"name": "multi_lang_inquiry", "description": "多语言自动询盘生成（中/英/西/阿/法/俄/日/韩等）", "endpoint": "/multi_lang_inquiry"},
+            {"name": "submit_rfq", "description": "提交 RFQ（含规格 + 数量 + 交付要求）", "endpoint": "/submit_rfq"},
+            {"name": "get_supplier_contact", "description": "查看供应商完整联系方式（已装 Skill 可见）", "endpoint": "/get_supplier_contact"},
+            {"name": "post_requirement", "description": "海外采购方发布公开需求（需求广场）", "endpoint": "/post_requirement"},
+            {"name": "browse_requirements", "description": "浏览公开需求广场", "endpoint": "/browse_requirements"},
             {"name": "leave_review", "description": "交易完成后买卖双方互评（v3.0，5 维度）", "endpoint": "/leave_review"},
             {"name": "trust_score", "description": "查询供应商/采购方信任评分与等级", "endpoint": "/trust_score"},
-            # 辅助
             {"name": "stats", "description": "查询全局统计数据（含缓存命中率）", "endpoint": "/stats"},
-            # v3.0 中间 Agent 维护层（仅供平台内部 / 高权限 Agent 调用）
-            {"name": "agent_status", "description": "[中间 Agent] 状态 + 健康度概览", "endpoint": "/agent/status"},
-            {"name": "agent_health", "description": "[中间 Agent] 厂家 MCP 健康检查报告", "endpoint": "/agent/health"},
-            {"name": "agent_routing", "description": "[中间 Agent] RFQ 路由推荐", "endpoint": "/agent/routing"},
-            {"name": "agent_alerts", "description": "[中间 Agent] 告警列表", "endpoint": "/agent/alerts"},
-            {"name": "agent_maintenance", "description": "[中间 Agent] 维护日志", "endpoint": "/agent/maintenance"},
-            {"name": "agent_optimize", "description": "[中间 Agent] 自我优化分析报告", "endpoint": "/agent/optimize"},
-            {"name": "agent_maintain", "description": "[中间 Agent] 手动触发维护任务", "endpoint": "/agent/maintain"},
         ],
+        "platform": {
+            "tools_total": 26,
+            "breakdown": {
+                "public": 13,     # 海外 Agent 实际能调（= 上方 tools 数组长度）
+                "chinese": 6,     # 中方 Agent 内部用
+                "internal": 7,    # 平台运维 Agent
+            },
+            "chinese_tools": [
+                {"name": "evaluate_sme", "endpoint": "/evaluate_sme", "purpose": "5 维评估中国制造业 AI 出海 Agent 化水平"},
+                {"name": "register_supplier", "endpoint": "/register_supplier", "purpose": "中方工厂注册入驻"},
+                {"name": "get_my_rfqs", "endpoint": "/get_my_rfqs", "purpose": "工厂查询自己收到的 RFQ 询盘"},
+                {"name": "send_quote", "endpoint": "/send_quote", "purpose": "供应商对 RFQ 报价并邮件通知采购方"},
+                {"name": "bid_on_requirement", "endpoint": "/bid_on_requirement", "purpose": "供应商对公开需求报价"},
+                {"name": "outreach_buyer", "endpoint": "/outreach_buyer", "purpose": "供应商主动外联采购方（信任分≥60）"},
+            ],
+            "internal_tools": [
+                {"name": "agent_status", "endpoint": "/agent/status", "purpose": "[中间 Agent] 状态 + 健康度概览"},
+                {"name": "agent_health", "endpoint": "/agent/health", "purpose": "[中间 Agent] 厂家 MCP 健康检查报告"},
+                {"name": "agent_routing", "endpoint": "/agent/routing", "purpose": "[中间 Agent] RFQ 路由推荐"},
+                {"name": "agent_alerts", "endpoint": "/agent/alerts", "purpose": "[中间 Agent] 告警列表"},
+                {"name": "agent_maintenance", "endpoint": "/agent/maintenance", "purpose": "[中间 Agent] 维护日志"},
+                {"name": "agent_optimize", "endpoint": "/agent/optimize", "purpose": "[中间 Agent] 自我优化分析报告"},
+                {"name": "agent_maintain", "endpoint": "/agent/maintain", "purpose": "[中间 Agent] 手动触发维护任务"},
+            ],
+        },
         "middle_agent": {
             "id": "linkmoney-middle-agent",
             "version": "3.0.0",
@@ -1049,7 +1064,7 @@ def mcp_manifest():
                           "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain"],
         },
         "homepage": "https://linkmoney.online",
-        "repository": "https://github.com/linkmoney-ai/linkmoney-skill",
+        "repository": "https://github.com/KevinANDcayla/linkmoney-skill",
     }
 
 
