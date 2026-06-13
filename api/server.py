@@ -972,28 +972,34 @@ class InventoryResponse(BaseModel):
 
 # ===== 根路由 =====
 
-@app.get("/")
+# Landing Page 路径（多种可能：build 镜像放 /web/，或运行时 cp 到 /app/web/）
+WEB_DIR_CANDIDATES = [
+    Path("/web"),                                  # Dockerfile 风格
+    Path(__file__).parent / "web",                 # 单层目录
+    Path(__file__).parent.parent / "web",         # 双层目录（api/server.py）
+]
+LANDING_HTML = None
+for d in WEB_DIR_CANDIDATES:
+    p = d / "landing.html"
+    if p.exists():
+        LANDING_HTML = p
+        break
+if LANDING_HTML is None:
+    LANDING_HTML = WEB_DIR_CANDIDATES[0] / "landing.html"  # 兜底
+
+
+@app.get("/", response_class=HTMLResponse)
 def root():
-    return {
-        "service": "LinkMoney MCP Server",
-        "version": "3.0.0",
-        "status": "running",
-        "endpoints": {
-            "c_side": ["/evaluate_sme"],
-            # 注：create_sample_skill / distribute_skill / optimize_skill /
-            #     get_overseas_buyer_db 计划在 v3.1 补齐（manifest 暂不列）。
-            "w_side": ["/find_china_supplier", "/get_pricing", "/get_inventory",
-                        "/match_spec", "/download_cert", "/multi_lang_inquiry", "/submit_rfq",
-                        "/leave_review", "/outreach_buyer", "/post_requirement", "/bid_on_requirement",
-                        "/trust_score"],
-            "middle_agent": ["/agent/status", "/agent/health", "/agent/routing",
-                             "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain"],
-            "other": ["/stats"],
-        },
-        "middle_agent": "LinkMoney 中间 Agent 维护层：双边 Skill 之间的中维护者",
-        "docs": "/docs",
-        "mcp_manifest": "/mcp/manifest.json",
-    }
+    """
+    根路由 → 营销 Landing Page
+    海外 Agent 调 API 请用 /mcp/manifest.json
+    """
+    if LANDING_HTML.exists():
+        return FileResponse(LANDING_HTML)
+    return HTMLResponse(
+        "<h1>LinkMoney</h1><p>Landing page not found. See <a href='/mcp/manifest.json'>/mcp/manifest.json</a> for API.</p>",
+        status_code=200,
+    )
 
 
 # ===== MCP 协议端点 =====
