@@ -17,6 +17,9 @@ services:
       - LINKMONEY_SMTP_FROM=${LINKMONEY_SMTP_FROM:-}
       - LINKMONEY_MCP_PROXY_ENABLED=${LINKMONEY_MCP_PROXY_ENABLED:-true}
       - LINKMONEY_CACHE_TTL=${LINKMONEY_CACHE_TTL:-60}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_FLASH_MODEL=${DEEPSEEK_FLASH_MODEL:-deepseek-v4-flash}
+      - DEEPSEEK_PRO_MODEL=${DEEPSEEK_PRO_MODEL:-deepseek-v4-pro}
     volumes:
       - ./data:/data
       - ./logs:/app/logs
