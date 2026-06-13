@@ -1,0 +1,68 @@
+version: "3.9"
+
+services:
+  linkmoney:
+    build: .
+    container_name: linkmoney-api
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      - LINKMONEY_API_KEYS=${LINKMONEY_API_KEYS:-lm-demo-2026}
+      - LINKMONEY_MAIL_ENABLED=${LINKMONEY_MAIL_ENABLED:-false}
+      - LINKMONEY_SMTP_HOST=${LINKMONEY_SMTP_HOST:-smtp.qq.com}
+      - LINKMONEY_SMTP_PORT=${LINKMONEY_SMTP_PORT:-587}
+      - LINKMONEY_SMTP_USER=${LINKMONEY_SMTP_USER:-}
+      - LINKMONEY_SMTP_PASSWORD=${LINKMONEY_SMTP_PASSWORD:-}
+      - LINKMONEY_SMTP_FROM=${LINKMONEY_SMTP_FROM:-}
+      - LINKMONEY_MCP_PROXY_ENABLED=${LINKMONEY_MCP_PROXY_ENABLED:-true}
+      - LINKMONEY_CACHE_TTL=${LINKMONEY_CACHE_TTL:-60}
+    volumes:
+      - ./data:/data
+      - ./logs:/app/logs
+    networks:
+      - linkmoney-net
+    healthcheck:
+      # 首次 /agent/status 要等 bootstrap + 健康检查缓存填充（最多 ~30s 跑 14 个厂家），
+      # start_period: 60s 给充分时间，之后缓存命中 < 2ms，永远秒过
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/agent/status', timeout=8)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  mcp-template: # 样板：厂家一键部署的 MCP Server
+    build:
+      context: ./supplier_mcp_template
+      dockerfile: Dockerfile
+    container_name: supplier-mcp-template
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+    environment:
+      - SUPPLIER_MCP_PORT=9001
+    volumes:
+      - ./supplier_mcp_template/data.json:/app/data.json
+    networks:
+      - linkmoney-net
+
+  nginx:
+    image: nginx:alpine
+    container_name: linkmoney-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs/cloudflare-ips.conf:/etc/nginx/cloudflare-ips.conf:ro
+      - ./certs/fullchain.pem:/etc/nginx/certs/fullchain.pem:ro
+      - ./certs/privkey.pem:/etc/nginx/certs/privkey.pem:ro
+    depends_on:
+      - linkmoney
+    networks:
+      - linkmoney-net
+
+networks:
+  linkmoney-net:
+    driver: bridge

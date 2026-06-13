@@ -1,0 +1,81 @@
+{
+  "company": {
+    "name_zh": "宁波永固紧固件有限公司",
+    "name_en": "Ningbo Yonggu Fasteners Co., Ltd.",
+    "port": "Ningbo",
+    "contact_person": "张三",
+    "email": "sales@yonggu-fastener.com",
+    "phone": "+86-138-XXXX-XXXX",
+    "wechat": "yonggu-sales"
+  },
+  "updated_at": "2026-06-11T12:00:00Z",
+  "products": [
+    {
+      "sku": "M10-304-A2-70-BOLT",
+      "name_zh": "M10 304不锈钢六角螺栓 A2-70",
+      "name_en": "M10 Hex Bolt A2-70, 304 Stainless Steel",
+      "category": "fastener",
+      "material": "304 Stainless Steel",
+      "grade": "A2-70",
+      "moq": 1000,
+      "pricing_tiers": [
+        {"min_qty": 1, "max_qty": 1000, "price_usd": 0.15},
+        {"min_qty": 1001, "max_qty": 5000, "price_usd": 0.12},
+        {"min_qty": 5001, "max_qty": 20000, "price_usd": 0.10},
+        {"min_qty": 20001, "max_qty": null, "price_usd": 0.08}
+      ],
+      "inventory": {
+        "status": "sufficient",
+        "quantity": 150000,
+        "unit": "pcs",
+        "lead_time_days": 15,
+        "updated_at": "2026-06-10T12:00:00Z"
+      },
+      "price_updated_at": "2026-06-01T00:00:00Z"
+    },
+    {
+      "sku": "M8-304-A2-70-BOLT",
+      "name_zh": "M8 304不锈钢六角螺栓 A2-70",
+      "name_en": "M8 Hex Bolt A2-70, 304 Stainless Steel",
+      "category": "fastener",
+      "material": "304 Stainless Steel",
+      "grade": "A2-70",
+      "moq": 1000,
+      "pricing_tiers": [
+        {"min_qty": 1, "max_qty": 1000, "price_usd": 0.12},
+        {"min_qty": 1001, "max_qty": 5000, "price_usd": 0.10},
+        {"min_qty": 5001, "max_qty": 20000, "price_usd": 0.08},
+        {"min_qty": 20001, "max_qty": null, "price_usd": 0.06}
+      ],
+      "inventory": {
+        "status": "sufficient",
+        "quantity": 200000,
+        "unit": "pcs",
+        "lead_time_days": 15,
+        "updated_at": "2026-06-10T12:00:00Z"
+      },
+      "price_updated_at": "2026-06-01T00:00:00Z"
+    },
+    {
+      "sku": "FAST-M10-304",
+      "name_zh": "定制 M10 304 紧固件",
+      "name_en": "Custom M10 304 Fastener",
+      "category": "fastener",
+      "material": "304 Stainless Steel",
+      "grade": "A2-70",
+      "moq": 5000,
+      "pricing_tiers": [
+        {"min_qty": 5000, "max_qty": 10000, "price_usd": 0.12},
+        {"min_qty": 10001, "max_qty": 50000, "price_usd": 0.10}
+      ],
+      "inventory": {
+        "status": "made_to_order",
+        "quantity": 0,
+        "unit": "pcs",
+        "lead_time_days": 30,
+        "updated_at": "2026-06-01T00:00:00Z"
+      },
+      "price_updated_at": "2026-06-01T00:00:00Z"
+    }
+  ]
+}

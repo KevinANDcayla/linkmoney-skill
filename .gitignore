@@ -1,0 +1,46 @@
+# 敏感配置
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+
+# 数据库（运行时数据）
+data/linkmoney.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# 日志
+logs/*.log
+logs/*.log.*
+!logs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 临时
+*.tmp
+*.bak
+*~
