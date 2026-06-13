@@ -31,6 +31,7 @@ from middle_agent import (
     middle_agent_alerts, middle_agent_maintenance, middle_agent_optimize,
     middle_agent_maintain, bootstrap_agent,
 )
+from llm_layer import get_llm, DeepSeekError  # DeepSeek V4 Flash/Pro
 
 # ===== 工具函数 =====
 _PINYIN_INITIAL = {
@@ -272,7 +273,6 @@ def _migrate_v21():
             CREATE TABLE IF NOT EXISTS beta_signups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 factory_name TEXT NOT NULL,
-                category TEXT NOT NULL,
                 contact_person TEXT NOT NULL,
                 phone TEXT NOT NULL,
                 email TEXT DEFAULT '',
@@ -282,6 +282,21 @@ def _migrate_v21():
                 created_at TEXT DEFAULT (datetime('now','localtime'))
             )
         """)
+
+        # rfqs 表迁移（v3.0+ — DeepSeek LLM 集成后新增的 message + parsed_data 列）
+        for col_name, col_type in [
+            ("quoted_price_usd", "REAL DEFAULT 0"),
+            ("lead_time_days", "INTEGER DEFAULT 0"),
+            ("total_price_usd", "REAL DEFAULT 0"),
+            ("notes", "TEXT DEFAULT ''"),
+            ("updated_at", "TEXT DEFAULT ''"),
+            ("message", "TEXT DEFAULT ''"),
+            ("parsed_data", "TEXT DEFAULT ''"),
+        ]:
+            try:
+                c.execute(f"ALTER TABLE rfqs ADD COLUMN {col_name} {col_type}")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
 
         conn.commit()
 
@@ -393,22 +408,12 @@ def init_db():
                 lead_time_days INTEGER DEFAULT 0,
                 total_price_usd REAL DEFAULT 0,
                 notes TEXT DEFAULT '',
-                updated_at TEXT DEFAULT ''
+                updated_at TEXT DEFAULT '',
+                message TEXT DEFAULT '',                -- v3.0+ — 买家原始自然语言 RFQ
+                parsed_data TEXT DEFAULT ''             -- v3.0+ — DeepSeek V4 Flash 解析结果 JSON
             )
         """)
-
-        # 数据库迁移: 为旧 rfqs 表添加新列
-        for col_name, col_type in [
-            ("quoted_price_usd", "REAL DEFAULT 0"),
-            ("lead_time_days", "INTEGER DEFAULT 0"),
-            ("total_price_usd", "REAL DEFAULT 0"),
-            ("notes", "TEXT DEFAULT ''"),
-            ("updated_at", "TEXT DEFAULT ''"),
-        ]:
-            try:
-                c.execute(f"ALTER TABLE rfqs ADD COLUMN {col_name} {col_type}")
-            except sqlite3.OperationalError:
-                pass  # 列已存在
+        # 注: rfqs 表的 ALTER TABLE 迁移已移到 _migrate_v21() 里（v3.0+），确保 DB 已存在也能跑
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS api_logs (
@@ -934,8 +939,21 @@ class EvaluateRequest(BaseModel):
 
 
 class InquiryRequest(BaseModel):
-    inquiry_zh: str
-    target_languages: list[str] = ["en", "ja", "de", "fr", "es", "ar"]
+    """多语言询盘请求 — v3.0 双向单次设计
+
+    新设计（v3.0+）：
+    - 默认走双向单次翻译：buyer_lang → zh 给工厂，zh → buyer_lang 给工厂主回复
+    - 旧版 8 国语言参数 target_languages 仍保留（向后兼容），会自动逐个翻译
+    - 接入 DeepSeek V4 Flash，data 不出境
+    """
+    # 新版：双向单次
+    inquiry_text: Optional[str] = None    # 任意语言原文（自动检测）
+    buyer_lang: str = "en"                # 买家语言
+    target_lang: str = "zh"               # 目标语言（默认给中国工厂）
+
+    # 旧版兼容
+    inquiry_zh: Optional[str] = None      # 旧版中文输入
+    target_languages: Optional[list[str]] = None  # 旧版多语言输出
 
 
 class DistributionsResponse(BaseModel):
@@ -1575,59 +1593,102 @@ def download_cert(supplier_id: str, cert_type: str):
 @app.post("/multi_lang_inquiry")
 def multi_lang_inquiry(req: InquiryRequest):
     """
-    多语言自动询盘生成
-    输入：中文询价单 + 目标语言列表（支持 JSON body）
-    输出：多语言版本询盘
+    多语言询盘生成（v3.0 — DeepSeek V4 Flash 双向单次设计）
+
+    设计原则：
+    - 实际采购场景只需要 2 次翻译（buyer→zh 给工厂，工厂→buyer lang 给买家）
+    - 不再过度翻译成 8 国语言
+    - 旧版 8 国语言参数 target_languages 仍兼容（自动逐个翻译）
+
+    输入:
+        inquiry_text: 任意语言原文（新版）/ inquiry_zh: 中文（旧版）
+        buyer_lang: 买家语言 (en/zh/ja/de/es/fr/ar/pt/ru)，默认 en
+        target_lang: 目标语言（新版双向单次），默认 zh
+        target_languages: 旧版 8 国语言列表
+
+    输出:
+        translations: {lang: {language, inquiry}} 字典
+        llm_provider: DeepSeek V4 Flash
+        key_terms: 提取的关键术语（避免翻译时丢失）
     """
-    inquiry_zh = req.inquiry_zh
-    target_languages = req.target_languages
-    if target_languages is None:
-        target_languages = ["en", "ja", "de", "fr", "es", "ar"]
+    llm = get_llm()
+    llm_available = llm.is_available()
 
-    lang_names = {
-        "en": "English",
-        "ja": "日本語",
-        "de": "Deutsch",
-        "fr": "Français",
-        "es": "Español",
-        "ar": "العربية",
-    }
+    # 兼容旧版 + 新版输入
+    src_text = req.inquiry_text or req.inquiry_zh
+    if not src_text:
+        raise HTTPException(status_code=400, detail="inquiry_text or inquiry_zh required")
 
-    translation_provider = _get_translation_provider()
+    # 决定要翻译成哪些目标语言
+    if req.target_languages:
+        # 旧版：多语言并发
+        target_languages = req.target_languages
+        mode = "multi_lang_legacy"
+    else:
+        # 新版：双向单次
+        target_languages = [req.target_lang]
+        mode = "bilingual_single"
 
-    # 模拟多语言翻译（实际应接入翻译 API）
-    templates = {
-        "en": f"[English RFQ]\n{inquiry_zh}\n---\nPlease provide FOB/CIF quotation with lead time and MOQ.",
-        "ja": f"[日本語 見積依頼]\n{inquiry_zh}\n---\nFOB/CIF価格、納期、MOQをご提示ください。",
-        "de": f"[Deutsch RFQ]\n{inquiry_zh}\n---\nBitte senden Sie uns ein FOB/CIF Angebot mit Lieferzeit und MOQ.",
-        "fr": f"[Français RFQ]\n{inquiry_zh}\n---\nVeuillez fournir un devis FOB/CIF avec délai de livraison et MOQ.",
-        "es": f"[Español RFQ]\n{inquiry_zh}\n---\nPor favor proporcione cotización FOB/CIF con plazo de entrega y MOQ.",
-        "ar": f"[العربية طلب عرض سعر]\n{inquiry_zh}\n---\nيرجى تقديم عرض سعر FOB/CIF مع وقت التسليم والحد الأدنى للطلب.",
-    }
+    lang_names = llm.SUPPORTED_LANGS
 
+    # 决定源语言
+    if mode == "bilingual_single":
+        src_lang = req.buyer_lang
+    else:
+        # 旧版：源语言固定是中文
+        src_lang = "zh"
+
+    # 关键术语提取（避免翻译时丢失）— 1 次 LLM 调用
+    key_terms = []
+    if llm_available and mode == "bilingual_single":
+        try:
+            key_terms = llm.extract_key_terms(src_text, src_lang)
+        except DeepSeekError as e:
+            logger.warning(f"extract_key_terms failed: {e}")
+
+    # 翻译
     translations = {}
     for lang in target_languages:
-        if lang in templates:
-            # 尝试用翻译 Provider 翻译 inquiry_zh，回退到模板
-            try:
-                translated_text = translation_provider.translate(inquiry_zh, "zh", lang)
-                inquiry_text = templates[lang].replace(inquiry_zh, translated_text)
-            except Exception:
-                inquiry_text = templates[lang]
+        if lang not in lang_names:
             translations[lang] = {
-                "language": lang_names.get(lang, lang),
-                "inquiry": inquiry_text,
+                "language": lang,
+                "inquiry": src_text,  # 不支持的语言原样返回
+                "_note": f"unsupported language '{lang}', returned original",
             }
+            continue
 
-    provider_name = type(translation_provider).__name__
+        if lang == src_lang:
+            # 同语言不翻译
+            translations[lang] = {"language": lang_names[lang], "inquiry": src_text}
+            continue
+
+        # 尝试 DeepSeek V4 Flash 翻译
+        translated = None
+        if llm_available:
+            try:
+                translated = llm.translate(src_text, src_lang, lang)
+            except DeepSeekError as e:
+                logger.warning(f"DeepSeek translate failed ({src_lang}→{lang}): {e}")
+
+        if translated is None:
+            # Fallback: 原样返回 + prefix（保证 API 永远不挂）
+            translated = f"[{lang_names[lang]} | 翻译未配置] {src_text}"
+
+        translations[lang] = {
+            "language": lang_names[lang],
+            "inquiry": translated,
+        }
 
     return {
-        "original_zh": inquiry_zh,
-        "target_languages": target_languages,
+        "mode": mode,
+        "source_language": src_lang,
+        "source_text": src_text,
         "translations": translations,
+        "key_terms": key_terms,
         "total_languages": len(translations),
-        "translation_provider": provider_name,
-        "note": "实际部署后应接入专业翻译 API（如 DeepL）",
+        "llm_provider": "DeepSeek V4 Flash" if llm_available else "fallback (no API key)",
+        "llm_available": llm_available,
+        "note": "双向单次翻译：buyer→zh 给工厂主，factory→buyer lang 给买家。Data 不出境。" if mode == "bilingual_single" else "8 国语言并发（兼容旧 API）",
     }
 
 
@@ -1644,9 +1705,14 @@ def submit_rfq(
     incoterms: str = "FOB",
     delivery_deadline: str = "",
     contact_email: str = "",
+    raw_message: str = "",         # v3.0+ — 买家原始自然语言需求（可选，触发 LLM parse_rfq）
 ):
     """
-    提交 RFQ
+    提交 RFQ（v3.0+ — DeepSeek V4 Flash 智能解析）
+
+    - raw_message 可选：买家原始自然语言 RFQ（"我要 50K M8 螺栓，要快，FOB 洛杉矶..."）
+    - 如果传了 raw_message，LLM 自动 parse 提取 category/spec/urgency 等
+    - 解析结果存入 rfqs 表，方便后续做 RFQ 智能路由
     """
     with get_db() as conn:
         s_row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
@@ -1670,13 +1736,48 @@ def submit_rfq(
         rfq_id = f"rfq-{ts}-{count + 1:03d}"
         created_at = datetime.now().isoformat() + "Z"
 
+        # v3.0+ — DeepSeek V4 Flash 智能解析 raw_message（买家自然语言 RFQ）
+        parsed_rfq = None
+        if raw_message and raw_message.strip():
+            try:
+                llm = get_llm()
+                if llm.is_available():
+                    parsed_rfq = llm.parse_rfq(raw_message, lang="auto")
+                    logger.info(f"RFQ {rfq_id} parsed: {parsed_rfq.get('category')}/{parsed_rfq.get('urgency')}")
+            except DeepSeekError as e:
+                logger.warning(f"parse_rfq failed for {rfq_id}: {e}")
+                parsed_rfq = None
+
+        # 用 LLM 解析结果覆盖默认（如有）
+        if parsed_rfq:
+            # 提取后用解析结果更新 port / delivery_deadline（如果买家没传）
+            if not port or port == "Ningbo":
+                if parsed_rfq.get("destination_port"):
+                    port = parsed_rfq["destination_port"]
+            if not delivery_deadline and parsed_rfq.get("deadline"):
+                delivery_deadline = parsed_rfq["deadline"]
+            # quantity 也用解析的
+            if not quantity and parsed_rfq.get("quantity"):
+                quantity = int(parsed_rfq["quantity"])
+            # target_price_usd
+            if (not target_price_usd or target_price_usd == 0) and parsed_rfq.get("target_price_usd"):
+                target_price_usd = float(parsed_rfq["target_price_usd"])
+
+        # rfq_message 字段存原始 raw_message + 解析结果
+        rfq_message_json = json.dumps({
+            "raw": raw_message,
+            "parsed": parsed_rfq,
+        }, ensure_ascii=False) if raw_message else None
+
         conn.execute("""
             INSERT INTO rfqs(id, supplier_id, buyer_id, sku, quantity, target_price_usd,
-                             port, incoterms, delivery_deadline, contact_email, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             port, incoterms, delivery_deadline, contact_email, status, created_at,
+                             message, parsed_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             rfq_id, supplier_id, buyer_id, sku, quantity, target_price_usd,
             port, incoterms, delivery_deadline, contact_email, "pending", created_at,
+            raw_message, rfq_message_json,
         ))
         conn.commit()
 
