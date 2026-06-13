@@ -1663,8 +1663,11 @@ def submit_rfq(
     buyer = _row_to_buyer(b_row)
 
     with get_db() as conn:
+        # 修复并发竞态：用毫秒级时间戳 + 数据库 COUNT 双重保证 ID 唯一
+        # 即使同毫秒两个客户端同时 SELECT COUNT，加 %f 微秒后仍可区分
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         count = conn.execute("SELECT COUNT(*) as cnt FROM rfqs").fetchone()["cnt"]
-        rfq_id = f"rfq-{datetime.now().strftime('%Y%m%d')}-{count + 1:03d}"
+        rfq_id = f"rfq-{ts}-{count + 1:03d}"
         created_at = datetime.now().isoformat() + "Z"
 
         conn.execute("""

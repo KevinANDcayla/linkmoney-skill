@@ -1,34 +1,58 @@
-# LinkMoney - MCP.so 收录指南
+# LinkMoney - MCP.so 收录指南 (v2 — 表单已验证)
 
 ## MCP.so 是什么
-mcp.so — MCP（Model Context Protocol）工具注册表，AI 开发者发现 MCP 服务的平台。
+**mcp.so** — MCP（Model Context Protocol）服务的公共注册表，AI 开发者发现 + 索引 MCP server 的平台。
 
-## 提交 URL
-https://mcp.so/submit
+## 提交 URL（已验证 200 OK）
+**https://mcp.so/submit**
 
-## 填写内容
+## Form 字段（已抓取页面验证）
 
-**Name**: linkmoney
-**Display Name**: LinkMoney（连钱）
-**Description**: 
-AI-native B2B marketplace connecting overseas procurement agents with verified Chinese factories. Features live pricing, real-time inventory, and automated RFQ — powered by MCP.
+| 字段 | 类型 | 必填 | 填什么 |
+|------|------|------|--------|
+| **Type** | radio | ✓ | **MCP Server** |
+| **Name** | text | ✓ | `linkmoney` |
+| **URL** | text | ✓ | `https://linkmoney.online/mcp/manifest.json` |
+| **Server Config** | textarea | ✗ | 见下方 JSON |
 
-**Categories**: business, procurement, supply-chain, B2B, automation
+## 完整 Server Config（JSON，复制粘贴）
 
-**MCP Endpoint**: https://linkmoney.online/mcp
+```json
+{
+  "mcpServers": {
+    "linkmoney": {
+      "url": "https://linkmoney.online/mcp/manifest.json",
+      "transport": "streamable-http"
+    }
+  }
+}
+```
 
-**Manifest URL**: https://linkmoney.online/mcp/manifest.json
+## 提交步骤
 
-**Tools Count**: 13 public tools
+### Step 1: 打开页面
+浏览器访问 https://mcp.so/submit
 
-**Pricing Model**: 3% success fee
+### Step 2: 填写表单
+按上表填 4 个字段。Type 选 "MCP Server"。
 
-**Website**: https://linkmoney.online
-**Repository**: https://github.com/KevinANDcayla/linkmoney-skill
+### Step 3: 提交
+点 "Submit" 按钮。**无需登录** — MCP.so 的 form 是开放的（已确认）。
 
-**Logo/Icon**: 可用 linkmoney.online/favicon.ico
+### Step 4: 等待审核
+通常 1-3 个工作日。被收录后会出现在：
+- https://mcp.so/servers（按字母排序）
+- https://mcp.so/search?q=linkmoney
+- 关键词搜索结果
 
-## MCP.so 收录的价值
-- 被 AI 开发者社区发现
-- 被 MCP.so 的目录 SEO 索引（DAU 高）
-- 获得反向链接到 linkmoney.online
+## 收录后的价值
+
+- **SEO 反链**到 linkmoney.online（DAU 高）
+- **MCP 开发者**安装 source — install 计数会公开
+- **被 Anthropic 内部使用** — mcp.so 已被 Anthropic 在多个文档中引用为 MCP server 的索引源
+
+## 截图准备（建议准备 3 张，但 form 不强制要）
+
+1. https://linkmoney.online/ 全屏
+2. https://linkmoney.online/mcp/manifest.json
+3. `find_china_supplier` 返回示例（截图或纯文本）

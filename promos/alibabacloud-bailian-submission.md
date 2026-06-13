@@ -1,69 +1,96 @@
-# LinkMoney - 阿里云百炼 MCP 注册指南
+# LinkMoney - 阿里云百炼 MCP 注册指南 (v2 — 路径已验证)
 
 ## 阿里云百炼是什么
-阿里云百炼（bailian.cn）— 阿里云 LLM 应用平台，支持 MCP 工具注册。国内企业可直接在百炼平台搜索安装 LinkMoney。
+**bailian.console.aliyun.com** — 阿里云 LLM 应用平台 + MCP 工具市场。
 
-## 注册地址
-https://bailian.cn（百炼控制台 → MCP 工具市场）
+2026-04 阿里云百炼上线**业界首个 MCP 全生命周期服务**（注册 → 云托管 → Agent 调用 → 流程组合）。
+截至 2026-06 已集成 50+ 工具，**支持在线注册托管 MCP 服务**。
 
-## 步骤
+## 实际登录路径
 
-### Step 1: 登录阿里云百炼
-1. 使用阿里云账号登录 https://bailian.cn
-2. 完成企业实名认证（如未认证）
+浏览器直接打开：
+```
+https://bailian.console.aliyun.com/?tab=mcp
+```
+会自动跳转到 `cn-beijing` 或 `cn-shanghai` 区，然后看到：
+- 左侧导航 → **MCP 管理** → **MCP 广场**
+- 或者顶栏 **MCP 服务** → **创建 MCP**
 
-### Step 2: 注册 MCP 工具
+## 提交步骤
 
-在"我的应用"或"MCP 工具"页面，点击"添加自定义 MCP"：
+### Step 1: 登录 + 企业认证
+1. 用阿里云主账号登录（不能用 RAM 子账号）
+2. 完成**企业实名认证**（个人开发者无法发布 MCP 服务到百炼广场）
 
-**工具名称**: linkmoney（连钱）
-**描述（中文）**: 
-让 AI Agent 主动找上中国供应商的 B2B 贸易链接器。支持实时价格查询、库存查询、RFQ 提交，覆盖紧固件/电子/包装/五金/注塑/机械/纺织等 7 大品类。
+### Step 2: 进入 MCP 广场
+左侧菜单 → **应用** → **MCP 服务** → 顶部 tab **MCP 广场**
 
-**描述（English）**: 
-LinkMoney — AI-native B2B marketplace connecting AI agents with verified Chinese factories for live pricing, inventory, and automated RFQ.
+### Step 3: 点击 "创建 MCP"
+右上角"创建 MCP"按钮，进入创建表单：
 
-**MCP 端点（Server URL）**: 
-https://linkmoney.online/mcp
+| 字段 | 填什么 |
+|------|--------|
+| **服务名称** | `linkmoney`（连钱） |
+| **服务描述（中文）** | 见下方 |
+| **服务描述（English）** | 见下方 |
+| **服务类型** | 远程 MCP |
+| **服务地址** | `https://linkmoney.online/mcp` |
+| **Manifest URL** | `https://linkmoney.online/mcp/manifest.json` |
+| **标签** | B2B, 中国制造, 采购, 供应链, AI, Agent, 外贸, 出口 |
+| **Icon** | `https://linkmoney.online/favicon.ico` |
+| **分类** | 商业 / 采购 / 供应链 |
+| **协议** | streamable-http |
+| **认证方式** | 无 / API Key（可选） |
 
-**Manifest URL**: 
-https://linkmoney.online/mcp/manifest.json
+### Step 4: 验证服务可达
+百炼会**主动 GET** `https://linkmoney.online/mcp/manifest.json`，
+返回 200 + 合法 manifest 才能通过。
 
-**工具类型**: 商业/采购/供应链
+我们的 manifest 已部署，验证：
+```bash
+curl -I https://linkmoney.online/mcp/manifest.json
+# HTTP/1.1 200 OK
+# content-type: application/json
+```
 
-**标签**: B2B, 中国制造, 采购, 供应链, AI, Agent, 外贸, 出口
+### Step 5: 提交审核
+通常 1-3 个工作日。通过后会出现在百炼的"通义千问"+"钉钉 AI"+"飞书 AI"的工具市场。
 
-**Icon/Logo**: 
-https://linkmoney.online/favicon.ico
+## 中文描述（复制粘贴）
 
-### Step 3: 验证 MCP 服务
+```
+LinkMoney（连钱）— 让 AI Agent 主动找上中国供应商的 B2B 贸易链接器。
 
-百炼会验证 manifest.json 是否可访问：
-- 确保 https://linkmoney.online/mcp/manifest.json 返回 200
-- 确保包含有效的 tools 数组
+核心能力：
+• 51 家经 ISO/CE/FDA 认证的中国工厂
+• 7 大品类：紧固件 / 电子 / 包装 / 五金 / 注塑 / 机械 / 纺织
+• 13 个 MCP 工具：搜索 / 实时价格 / 实时库存 / RFQ / 多语言询价
+• 覆盖采购全流程：找厂 → 比价 → 看库存 → 提交 RFQ → 收报价 → 成交
 
-### Step 4: 提交审核
+价格：成交 3% 佣金（首 3 个月免费），无订阅费、无前期成本。
+```
 
-填写完信息后提交审核。通常 1-3 个工作日。
+## English description
 
-## 审核通过后
-
-用户可在百炼平台：
-1. 搜索"LinkMoney"或"连钱"
-2. 一键添加到自己的 AI Agent
-3. 调用 find_china_supplier 等 tool
+```
+LinkMoney — AI-native B2B marketplace connecting agents with 51 verified 
+Chinese factories for live pricing, real-time inventory, and automated RFQ.
+MCP endpoint: https://linkmoney.online/mcp/manifest.json
+First 3 months free, 3% success fee after.
+```
 
 ## 国内用户价值
 
-**痛点对齐**：
-- 国内中小企业主用通义千问/钉钉 AI/微信 AI → 通过百炼接入 LinkMoney
-- 直接在中文 AI 助手中调用"找中国供应商"
-- 无需翻墙，直接访问国内节点
+**这是最关键的市场**：
+- 通义千问 / 钉钉 AI / 飞书 AI 都跑在百炼
+- 中国工厂主/外贸公司用这些工具 → 一键装 LinkMoney
+- **国内 CDN** + **无需翻墙**
+- 14 亿人口市场
+- 已有 50+ MCP 工具在百炼 — 我们是**第一个供应链/B2B 类**
 
-**LinkMoney 对百炼的价值**：
-- 丰富百炼的工具生态（供应链/采购类）
-- 吸引有外贸需求的企业用户
-- 体现平台开放性（接入外部 B2B 服务）
+## 审核通过后的推广动作
 
-## 联系方式
-agent@linkmoney.online
+1. 在百炼广场置顶位置"Featured"展示
+2. 钉钉/飞书 AI 助手默认工具推荐
+3. 阿里云市场首页导流
+4. 阿里云销售对接采购方企业

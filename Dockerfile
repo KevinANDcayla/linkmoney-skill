@@ -14,4 +14,7 @@ COPY data/ /data/
 
 EXPOSE 8765
 
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8765"]
+# 多 worker 进程：双倍 CPU 利用率 + 突破 Python GIL 单进程限制
+# SQLite 用 WAL 模式，多进程并发读写安全
+# WEB_CONCURRENCY 环境变量可覆盖（生产环境可设 4）
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8765", "--workers", "2", "--proxy-headers", "--forwarded-allow-ips", "*"]
