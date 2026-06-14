@@ -7,6 +7,8 @@ services:
     restart: unless-stopped
     ports:
       - "8765:8765"
+    env_file:
+      - .env
     environment:
       - LINKMONEY_API_KEYS=${LINKMONEY_API_KEYS:-lm-demo-2026}
       - LINKMONEY_MAIL_ENABLED=${LINKMONEY_MAIL_ENABLED:-false}
