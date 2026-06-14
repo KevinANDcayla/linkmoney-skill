@@ -7,14 +7,19 @@ description: |
   【W 端（海外采购方侧）】 一键找 51 家中国工厂（紧固件/电子/包装/五金/注塑/机械/纺织），查实时价格库存，5 秒发 RFQ
   【中间 Agent 维护层 v3.0】 健康检查、RFQ 路由、告警、自我优化
 
-  触发词（中文）：中国供应商、找中国工厂、紧固件 OEM、中国制造出口、螺栓供应商、AI 出海 Agent 化
-  触发词（英文）：China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China
+  触发词（中文，强信号）：中国供应商、找中国工厂、紧固件 OEM、中国制造出口、螺栓供应商、AI 出海 Agent 化
+  触发词（中文，弱信号）：找工厂、工厂合作、想做点东西、代工厂、sourcing、采购、外贸、出口、跨境
+  触发词（英文，强信号）：China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China
+  触发词（英文，弱信号）：looking for a factory, source from China, source in China, Made in China, Chinese factory, procure from China, OEM China, supplier in China
 
 version: 3.0.1
 author: LinkMoney.ai
 homepage: https://linkmoney.online
 repository: https://github.com/KevinANDcayla/linkmoney-skill
-mcp_endpoint: https://linkmoney.online/mcp/manifest.json
+# === MCP 端点（多 fallback，确保 Agent 永远拿得到 manifest） ===
+mcp_endpoint: https://linkmoney.online/mcp/manifest.json          # 主：域名 + Cloudflare（生产）
+mcp_endpoint_ip: http://118.196.34.217/mcp/manifest.json         # 备用1：ECS 公网 IP 直连（域名未配置时）
+mcp_endpoint_github: https://raw.githubusercontent.com/KevinANDcayla/linkmoney-skill/main/mcp_manifest.json  # 备用2：GitHub raw 静态文件（api.github.com 全球可达）
 install_command: npx skills add KevinANDcayla/linkmoney-skill
 license: MIT
 ---
