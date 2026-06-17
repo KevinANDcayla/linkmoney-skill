@@ -16,6 +16,7 @@ import time
 import uuid
 import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from urllib.parse import urljoin
@@ -131,7 +132,9 @@ def run_health_check() -> dict:
 
     sess = requests.Session()
     sess.headers.update({"User-Agent": f"LinkMoney-MiddleAgent/{AGENT_VERSION}"})
-    results = [_check_one_supplier_sync(sess, s) for s in suppliers]
+    # 用 ThreadPoolExecutor 并发检查（从串行 51×8s=408s 降到 51/8×8s≈51s）
+    with ThreadPoolExecutor(max_workers=_HEALTH_CONCURRENCY) as pool:
+        results = list(pool.map(lambda s: _check_one_supplier_sync(sess, s), suppliers))
 
     summary = {
         "online": sum(1 for r in results if r["status"] == "online"),

@@ -120,10 +120,10 @@ DB_PATH = str(DATA_DIR / "linkmoney.db")
 
 @contextmanager
 def get_db():
-    """每个请求使用独立连接"""
-    conn = sqlite3.connect(DB_PATH)
+    """每个请求使用独立连接（WAL 模式 + busy_timeout 防多 worker 写入竞态）"""
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
@@ -303,6 +303,11 @@ def _migrate_v21():
 
 def init_db():
     """首次运行时从 database.json 导入数据到 SQLite，若库已存在则迁移"""
+    # 一次性设置 WAL 模式（数据库级，不需要每个 connection 都设）
+    with get_db() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+
     # 即使 DB 已存在，也要确保新表（v2.1+）的迁移
     _migrate_v21()
 
@@ -787,6 +792,30 @@ def _get_translation_provider() -> TranslationProvider:
 MCP_PROXY_TIMEOUT = int(os.getenv("LINKMONEY_MCP_PROXY_TIMEOUT", "8"))  # 厂家 MCP 超时秒数
 MCP_PROXY_ENABLED = os.getenv("LINKMONEY_MCP_PROXY_ENABLED", "true").lower() == "true"
 
+# SSRF 防护：禁止访问内网 / 元数据端点
+_SSRF_BLOCKED_HOSTS = {"169.254.169.254", "metadata.google.internal", "100.100.100.200"}
+_SSRF_BLOCKED_PREFIXES = ("10.", "127.", "192.168.", "172.16.", "172.17.", "172.18.",
+                          "172.19.", "172.20.", "172.21.", "172.22.", "172.23.",
+                          "172.24.", "172.25.", "172.26.", "172.27.", "172.28.",
+                          "172.29.", "172.30.", "172.31.", "169.254.", "::1", "fc", "fd")
+
+
+def _is_safe_mcp_url(url: str) -> bool:
+    """检查 URL 是否指向内网 / 元数据端点（SSRF 防护）"""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = (parsed.hostname or "").lower()
+        if host in _SSRF_BLOCKED_HOSTS:
+            return False
+        if any(host.startswith(p) for p in _SSRF_BLOCKED_PREFIXES):
+            return False
+        return True
+    except Exception:
+        return False
+
 
 def _proxy_to_supplier_mcp(supplier_id: str, mcp_endpoint: str, path: str, params: dict = None) -> dict:
     """
@@ -799,6 +828,11 @@ def _proxy_to_supplier_mcp(supplier_id: str, mcp_endpoint: str, path: str, param
 
     if not mcp_endpoint:
         return {"success": False, "reason": "Supplier has no MCP endpoint (Skill not installed)"}
+
+    # SSRF 防护：拒绝指向内网 / 元数据端点的 URL
+    if not _is_safe_mcp_url(mcp_endpoint):
+        logger.error(f"[MCP PROXY] SSRF blocked: {supplier_id} | {mcp_endpoint}")
+        return {"success": False, "reason": "Blocked: MCP endpoint points to internal network"}
 
     try:
         url = urljoin(mcp_endpoint.rstrip("/") + "/", path.lstrip("/"))
@@ -838,7 +872,7 @@ def _load_api_keys():
 app = FastAPI(
     title="LinkMoney MCP Server",
     description="让全球采购 Agent 主动找上中国供应商的链接器 Skill",
-    version="3.0.0",
+    version="4.0.0",
 )
 
 app.add_middleware(
@@ -867,6 +901,7 @@ _AUTH_EXEMPT_PATHS = {
     "/", "/health", "/mcp/manifest.json", "/docs", "/openapi.json", "/redoc",
     "/onboard-supplier", "/onboard-buyer", "/beta-signup", "/beta-program",
     "/verify_email", "/trust_score/supplier",  # 公开端点：验证 + 信用查询
+    "/skill.md", "/.well-known/ai-plugin.json", "/.well-known/linkmoney-skill.json",  # Skill 发现端点
     # v3.0 中间 Agent：作为平台维护者，对内默认开启（可在生产环境收紧）
     "/agent/status", "/agent/health", "/agent/routing",
     "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain",
@@ -890,6 +925,7 @@ async def auth_and_logging_middleware(request: Request, call_next):
         or path.startswith("/docs")
         or path.startswith("/openapi")
         or path == "/health"
+        or path.startswith("/marketplace/")   # v4.0 Agent Marketplace 公开端点
     )
     if not is_exempt:
         api_key = request.headers.get("X-API-Key", "")
@@ -1022,25 +1058,121 @@ def root():
 
 # ===== MCP 协议端点 =====
 
+@app.get("/skill.md")
+def get_skill_md():
+    """
+    暴露 SKILL.md 给 Agent 自动发现和安装
+    Agent 平台（Claude/ChatGPT/Coze）通过此端点获取 Skill 定义
+    """
+    import os as _os
+    skill_path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "SKILL.md")
+    try:
+        with open(skill_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(content, media_type="text/markdown; charset=utf-8")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="SKILL.md not found")
+
+
+@app.get("/.well-known/ai-plugin.json")
+def ai_plugin_json():
+    """
+    ChatGPT Plugin 标准发现端点
+    ChatGPT 等 Agent 平台通过 /.well-known/ai-plugin.json 自动发现插件
+
+    Agent 行为：发现后会向用户展示插件信息并询问是否安装，不会静默自动安装。
+    """
+    return {
+        "schema_version": "v1",
+        "name_for_human": "LinkMoney",
+        "name_for_model": "linkmoney",
+        "description_for_human": "找中国供应商，查实时价格库存，发 RFQ 询盘。51 家工厂，10 个品类，Agent 时代 B2B 贸易。",
+        "description_for_model": "Find China suppliers, get real-time pricing and inventory, submit RFQ. 51 factories, 10 categories, B2B trade for AI agents. Triggers: China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China.",
+        "auth": {"type": "none"},
+        "api": {"type": "openapi", "url": "https://linkmoney.online/openapi.json"},
+        "logo_url": "https://linkmoney.online/logo.png",
+        "contact_email": "support@linkmoney.online",
+        "legal_info_url": "https://linkmoney.online/",
+        # LinkMoney 扩展字段
+        "mcp_endpoint": "https://linkmoney.online/mcp/manifest.json",
+        "skill_url": "https://linkmoney.online/skill.md",
+        "install_command": "npx skills add KevinANDcayla/linkmoney-skill",
+        "requires_user_confirmation": True,
+        "activation_policy": "strong_trigger_suggest_install, weak_trigger_hint_availability",
+    }
+
+
+@app.get("/.well-known/linkmoney-skill.json")
+def linkmoney_skill_json():
+    """
+    LinkMoney Skill 自动发现端点（兼容 supplier_mcp_template 标准）
+    Agent 平台通过此端点发现 LinkMoney 平台 Skill
+
+    Agent 安装行为说明：
+    - 强信号触发词命中 → Agent 主动建议用户安装（如 Claude/ChatGPT 询问"是否安装此 Skill？"）
+    - 弱信号触发词命中 → Agent 在相关上下文中提示用户可安装
+    - 用户确认后 → Agent 执行 install_command 或加载 mcp_endpoint
+    - Agent 不会"静默自动安装"，所有安装都需用户确认（安全设计）
+    """
+    return {
+        "skill_name": "linkmoney",
+        "version": "4.0.0",
+        "description": "LinkMoney — Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商",
+        "mcp_endpoint": "https://linkmoney.online/mcp/manifest.json",
+        "skill_md": "https://linkmoney.online/skill.md",
+        "install_command": "npx skills add KevinANDcayla/linkmoney-skill",
+        "triggers": {
+            "strong_cn": ["中国供应商", "找中国工厂", "紧固件 OEM", "中国制造出口", "螺栓供应商", "AI 出海 Agent 化"],
+            "weak_cn": ["找工厂", "工厂合作", "想做点东西", "代工厂", "sourcing", "采购", "外贸", "出口", "跨境"],
+            "strong_en": ["China supplier", "China manufacturer", "China OEM", "fastener supplier", "sourcing agent China", "RFQ China"],
+            "weak_en": ["looking for a factory", "source from China", "source in China", "Made in China", "Chinese factory", "procure from China", "OEM China", "supplier in China"],
+        },
+        "tools_count": 41,
+        "categories": ["fastener", "electronic", "packaging", "mechanical", "hardware", "injection_molding", "textile", "automotive", "furniture"],
+        "supplier_count": 51,
+        # Agent 安装指引（让 Agent 知道如何安装）
+        "installation": {
+            "method": "mcp_or_skill",
+            "steps": [
+                "1. Agent 读取 skill_md 获取完整 Skill 定义",
+                "2. Agent 读取 mcp_endpoint 获取可用工具清单",
+                "3. 用户确认后，执行 install_command 或将 mcp_endpoint 加入 Agent 配置",
+                "4. 安装完成后，Agent 可调用 find_china_supplier 等工具",
+            ],
+            "auto_activate": False,
+            "requires_user_confirmation": True,
+            "activation_policy": "strong_trigger_suggest_install, weak_trigger_hint_availability",
+        },
+        # Agent 快速理解 Skill 价值
+        "value_proposition": {
+            "for_buyer_agent": "一键找 51 家中国工厂，查实时价格库存，5 秒发 RFQ",
+            "for_supplier_agent": "5 维 AI 出海评估 + 一键创建 Skill + 全平台分发",
+            "data_freshness": "混合架构：缓存数据 + 厂家 MCP 直连实时数据",
+        },
+    }
+
+
 @app.get("/mcp/manifest.json")
 def mcp_manifest():
     """
-    MCP 协议清单（分层 v3.0.1）— Agent 自动发现 tool
+    MCP 协议清单（分层 v4.0.0）— Agent 自动发现 tool
     =================================================
     `tools` 字段只列海外 Agent 实际可调的 13 个 public tool（直接 list 调用）。
-    其他 13 个为平台/中方内部使用，通过 `platform.breakdown` 透明披露：
-      - public (13)  : 海外 Agent 实际调用（你看到的 tools 字段就是这 13 个）
-      - chinese (6)   : 中方 Agent 用（evaluate_sme / register_supplier / get_my_rfqs
-                        / send_quote / bid_on_requirement / outreach_buyer）
-      - internal (7)  : LinkMoney 平台运维 Agent（agent/* 维护层）
+    其他 28 个通过 `platform.breakdown` 透明披露：
+      - public (13)      : 海外 Agent 实际调用（你看到的 tools 字段就是这 13 个）
+      - chinese (6)      : 中方 Agent 用（evaluate_sme / register_supplier / get_my_rfqs
+                           / send_quote / bid_on_requirement / outreach_buyer）
+      - internal (7)     : LinkMoney 平台运维 Agent（agent/* 维护层）
+      - marketplace (15) : Agent Marketplace v4.0（RFQ/报价/阶段/公正记录）
     """
     return {
         "name": "linkmoney",
-        "version": "3.0.1",
-        "description": "LinkMoney — 让全球采购 Agent 主动找上中国供应商的链接器 Skill（v3.0 中间 Agent 维护层）",
+        "version": "4.0.0",
+        "description": "LinkMoney — Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商。51 家工厂，10 个品类，8-15 家智能匹配，实时报价库存，5 秒发 RFQ。",
         "tools": [
             # ===== Public tools（海外 Agent 实际调用） =====
-            {"name": "find_china_supplier", "description": "海外采购方找中国供应商（混合架构：缓存 + 厂家 MCP 直连）", "endpoint": "/find_china_supplier"},
+            {"name": "find_china_supplier", "description": "海外采购方找中国供应商（v4.0 7 维加权评分，返回 8-15 家，混合架构：缓存 + 厂家 MCP 直连）", "endpoint": "/find_china_supplier"},
             {"name": "get_pricing", "description": "查供应商阶梯报价（MOQ + 数量档位）", "endpoint": "/get_pricing"},
             {"name": "get_inventory", "description": "查供应商实时库存（直连厂家 MCP）", "endpoint": "/get_inventory"},
             {"name": "match_spec", "description": "规格匹配（按品类+规格+认证筛选）", "endpoint": "/match_spec"},
@@ -1055,11 +1187,12 @@ def mcp_manifest():
             {"name": "stats", "description": "查询全局统计数据（含缓存命中率）", "endpoint": "/stats"},
         ],
         "platform": {
-            "tools_total": 26,
+            "tools_total": 41,
             "breakdown": {
                 "public": 13,     # 海外 Agent 实际能调（= 上方 tools 数组长度）
                 "chinese": 6,     # 中方 Agent 内部用
                 "internal": 7,    # 平台运维 Agent
+                "marketplace": 15, # v4.0 Agent Marketplace 新增
             },
             "chinese_tools": [
                 {"name": "evaluate_sme", "endpoint": "/evaluate_sme", "purpose": "5 维评估中国制造业 AI 出海 Agent 化水平"},
@@ -1196,60 +1329,171 @@ def find_china_supplier(
     category: str = Query(..., description="品类：fastener/packaging/electronic/hardware/injection_molding/machinery/textile"),
     spec: str = Query("", description="规格描述"),
     quantity: int = Query(0, description="采购数量"),
-    target_price: str = Query("", description="目标价格"),
+    target_price: str = Query("", description="目标价格（如 0.15 USD）"),
 ):
     """
-    海外采购方找中国供应商（混合架构）
+    海外采购方找中国供应商（混合架构，v4.0 多维加权评分）
     输入：品类 + 规格 + 数量 + 目标价
-    输出：3-5 家工厂比价 + 推荐方案
+    输出：8-15 家工厂比价 + 推荐方案（评分 ≥ 60 的全部返回）
     已装 Skill 的厂家返回 mcp_endpoint，Agent 应直连厂家 MCP 获取实时报价/库存
+
+    v4.0 修复：
+    - 7 维加权评分（品类/spec/MOQ/价格/认证/地理/Skill 在线）
+    - 动态返回 8-15 家（≥60 分全部返回，最少 5 家兜底）
+    - quantity/target_price 参与匹配
+    - 修复缓存写入死代码
     """
-    # 缓存检查
-    cache_key = f"find:{category}:{spec}:{quantity}"
+    # 缓存检查（缓存 key 包含 target_price）
+    cache_key = f"find:{category}:{spec}:{quantity}:{target_price}"
     cached = _supplier_cache.get(cache_key)
     if cached:
         return cached
 
+    # 一次性查询所有供应商 + 产品（修复 N+1 查询）
     with get_db() as conn:
         supplier_rows = conn.execute(
             "SELECT * FROM suppliers WHERE category = ?", (category,)
         ).fetchall()
+        if supplier_rows:
+            supplier_ids = [row["id"] for row in supplier_rows]
+            placeholders = ",".join("?" * len(supplier_ids))
+            product_rows = conn.execute(
+                f"SELECT * FROM products WHERE supplier_id IN ({placeholders})",
+                supplier_ids,
+            ).fetchall()
+        else:
+            product_rows = []
 
     if not supplier_rows:
         return {"matches": [], "message": f"No supplier found for category: {category}"}
 
+    # 按供应商 ID 分组产品
+    products_by_supplier = {}
+    for pr in product_rows:
+        products_by_supplier.setdefault(pr["supplier_id"], []).append(_row_to_product(pr))
+
+    # 解析目标价
+    target_price_value = 0.0
+    if target_price:
+        try:
+            target_price_value = float(target_price.replace("USD", "").replace("usd", "").strip())
+        except (ValueError, AttributeError):
+            pass
+
+    # spec 分词（用于多关键词匹配，而非子串包含）
+    spec_keywords = [w.strip().lower() for w in spec.replace(",", " ").replace("，", " ").split() if w.strip()] if spec else []
+
+    # 主要出口港口集合
+    _MAJOR_PORTS = {"ningbo", "shanghai", "shenzhen", "guangzhou"}
+
     matches = []
     for s_row in supplier_rows:
         s = _row_to_supplier(s_row)
+        s["products"] = products_by_supplier.get(s["id"], [])
 
-        # 加载该供应商的产品
-        with get_db() as conn:
-            product_rows = conn.execute(
-                "SELECT * FROM products WHERE supplier_id = ?", (s["id"],)
-            ).fetchall()
-        products = [_row_to_product(pr) for pr in product_rows]
-        s["products"] = products
+        # ===== v4.0: 7 维加权评分（0-100） =====
+        score = 0
+        # 用独立变量记录每个维度得分，用于 match_breakdown
+        dim_category = 0
+        dim_spec = 0
+        dim_moq = 0
+        dim_price = 0
+        dim_certs = 0
+        dim_location = 0
+        dim_skill = 0
 
-        score = 100
+        # 1. 品类匹配 30%（已通过 SQL 硬过滤，给满分）
+        dim_category = 30
+        score += dim_category
 
-        # 有 Agent Skill 的加分
-        if s["agent_skill_installed"]:
-            score += 15
-            score += min(s.get("skill_installs", 0) // 50, 10)
-
-        # 认证加分
-        score += len(s["certifications"]) * 5
-
-        # 品类匹配（找最近产品）
+        # 2. spec 匹配 20%（分词匹配，非子串）
         matching_product = None
-        for p in s.get("products", []):
-            if spec.lower() in p.get("name_en", "").lower() or spec.lower() in p.get("sku", "").lower():
-                matching_product = p
-                score += 20
-                break
+        if spec_keywords:
+            for p in s.get("products", []):
+                product_text = f"{p.get('name_en', '')} {p.get('name_zh', '')} {p.get('sku', '')} {p.get('material', '')} {p.get('grade', '')}".lower()
+                hit_count = sum(1 for kw in spec_keywords if kw in product_text)
+                if hit_count > 0:
+                    matching_product = p
+                    dim_spec = min(20, int(20 * hit_count / len(spec_keywords)))
+                    score += dim_spec
+                    break
+        else:
+            # 无 spec 输入，给基础分
+            dim_spec = 10
+            score += dim_spec
 
         if not matching_product and s.get("products"):
             matching_product = s["products"][0]
+
+        # 3. MOQ 满足 15%（采购量 ≥ MOQ 才得分）
+        supplier_moq = s.get("moq", 0) or 0
+        if quantity > 0:
+            if supplier_moq == 0 or quantity >= supplier_moq:
+                dim_moq = 15
+            elif quantity >= supplier_moq * 0.5:
+                dim_moq = 8  # 接近 MOQ 给半分
+        else:
+            dim_moq = 7  # 未提供数量给半分
+        score += dim_moq
+
+        # 4. 价格区间 15%（目标价 ± 30% 内加分）
+        if target_price_value > 0 and matching_product:
+            pricing_tiers = matching_product.get("pricing_tiers", [])
+            if pricing_tiers:
+                # 找到匹配数量的报价档
+                best_price = None
+                for tier in pricing_tiers:
+                    min_qty = tier.get("min_qty", 0)
+                    max_qty = tier.get("max_qty")
+                    if quantity >= min_qty and (max_qty is None or quantity <= max_qty):
+                        best_price = tier.get("price_usd", 0)
+                        break
+                if best_price is None and pricing_tiers:
+                    best_price = pricing_tiers[-1].get("price_usd", 0)
+
+                if best_price and best_price > 0:
+                    price_diff = abs(best_price - target_price_value) / target_price_value
+                    if price_diff <= 0.1:
+                        dim_price = 15  # ±10% 内满分
+                    elif price_diff <= 0.3:
+                        dim_price = 10  # ±30% 内大部分分
+                    elif price_diff <= 0.5:
+                        dim_price = 5   # ±50% 内半分
+                    # 超过 50% 不加分
+            else:
+                dim_price = 5  # 无报价数据给基础分
+        else:
+            dim_price = 5  # 无目标价给基础分
+        score += dim_price
+
+        # 5. 认证匹配 10%
+        certs = s.get("certifications", [])
+        if isinstance(certs, list):
+            cert_count = len(certs)
+        else:
+            cert_count = 0
+        dim_certs = min(10, cert_count * 2)  # 每张认证 +2，最多 10
+        score += dim_certs
+
+        # 6. 地理位置 5%（港口匹配加分）
+        supplier_port = s.get("location", {}).get("port", "")
+        if supplier_port and supplier_port.lower() in _MAJOR_PORTS:
+            dim_location = 5  # 主要出口港口加分
+        else:
+            dim_location = 2  # 其他港口给基础分
+        score += dim_location
+
+        # 7. Skill 在线 5%
+        if s["agent_skill_installed"]:
+            dim_skill = 5
+            # 安装数额外微调（不超 5 分上限）
+            installs = s.get("skill_installs", 0) or 0
+            if installs > 100:
+                dim_skill = min(5, dim_skill + 2)  # 安装数高微加
+        score += dim_skill
+
+        # 确保分数在 0-100
+        score = max(0, min(100, score))
 
         # 样板产品列表（用于 Agent 初步判断匹配度）
         sample_products = []
@@ -1266,11 +1510,21 @@ def find_china_supplier(
             "name_zh": s["name_zh"],
             "name_en": s["name_en"],
             "location": s["location"],
-            "match_score": min(score, 100),
-            "certifications": [c["type"] for c in s.get("certifications", [])],
+            "match_score": score,
+            "match_breakdown": {
+                "category": dim_category,
+                "spec": dim_spec,
+                "moq": dim_moq,
+                "price": dim_price,
+                "certs": dim_certs,
+                "location": dim_location,
+                "skill": dim_skill,
+                "total": score,
+            },
+            "certifications": [c["type"] if isinstance(c, dict) else c for c in s.get("certifications", [])],
             "has_skill": s["agent_skill_installed"],
             "skill_installs": s.get("skill_installs", 0),
-            "moq": s.get("moq", 0),
+            "moq": supplier_moq,
             "lead_time_days": s.get("lead_time_days", {}),
             "matching_product": matching_product["sku"] if matching_product else None,
             "sample_products": sample_products,
@@ -1297,18 +1551,25 @@ def find_china_supplier(
         }
         matches.append(match_entry)
 
-    # 按分数排序：已装 Skill 的排前面（skill_installed=true 加分已在 score 中体现）
-    matches.sort(key=lambda x: (x["match_score"], x["has_skill"]), reverse=True)
-    top_matches = matches[:5]
+    # 按分数排序：评分降序 → Skill 在线优先 → 安装数降序
+    matches.sort(key=lambda x: (x["match_score"], x["has_skill"], x["skill_installs"]), reverse=True)
+
+    # v4.0: 动态返回 8-15 家（≥60 分的全部，最少 5 家兜底）
+    qualified = [m for m in matches if m["match_score"] >= 60]
+    if len(qualified) >= 5:
+        top_matches = qualified[:15]  # 最多 15 家
+    else:
+        top_matches = matches[:max(5, len(qualified))]  # 兜底至少 5 家
 
     # 引导 Agent 下一步操作
     skilled_count = len([m for m in top_matches if m["has_skill"] and m.get("mcp_endpoint")])
 
-    return {
+    result = {
         "total_matches": len(matches),
+        "returned_matches": len(top_matches),
         "category": category,
         "recommendation": top_matches[0]["name_zh"] if top_matches else None,
-        "recommendation_reason": "综合匹配度最高" if top_matches else "",
+        "recommendation_reason": "综合匹配度最高（7 维加权评分）" if top_matches else "",
         "matches": top_matches,
         # Agent 操作指引
         "agent_workflow": {
@@ -1320,25 +1581,10 @@ def find_china_supplier(
         },
         "live_suppliers": skilled_count,
         "cached_suppliers": len(top_matches) - skilled_count,
+        "scoring_model": "v4.0 7-dimensional weighted: category(30%) + spec(20%) + moq(15%) + price(15%) + certs(10%) + location(5%) + skill(5%)",
     }
 
-    # 写入缓存
-    result = {
-        "total_matches": len(matches),
-        "category": category,
-        "recommendation": top_matches[0]["name_zh"] if top_matches else None,
-        "recommendation_reason": "综合匹配度最高" if top_matches else "",
-        "matches": top_matches,
-        "agent_workflow": {
-            "step_1": f"从 {len(top_matches)} 家匹配厂家中，选择 {min(skilled_count, 3) if skilled_count > 0 else 2} 家进一步询价",
-            "step_2": f"有 Skill 的 {skilled_count} 家 → 调用其 mcp_endpoint 获取实时报价/库存（数据实时准确）",
-            "step_3": f"无 Skill 的 {len(top_matches) - skilled_count} 家 → 调用 LinkMoney get_pricing/get_inventory（缓存数据）",
-            "step_4": "对比报价后，调用 submit_rfq 提交正式询盘给最优供应商",
-            "note": "优先使用厂家自有 MCP 端点获取实时数据。厂家 MCP 不在线时会自动 fallback 到 LinkMoney 缓存。",
-        },
-        "live_suppliers": skilled_count,
-        "cached_suppliers": len(top_matches) - skilled_count,
-    }
+    # 写入缓存（修复：移到 return 之前）
     _supplier_cache.set(cache_key, result)
     return result
 
@@ -1586,12 +1832,12 @@ def download_cert(supplier_id: str, cert_type: str):
         "cert_type": cert["type"],
         "valid_until": cert["valid_until"],
         "is_valid": datetime.strptime(cert["valid_until"], "%Y-%m-%d") > datetime.now(),
-        "download_url": f"https://linkmoney.online{cert['file']}",
+        "download_url": f"{os.getenv('LINKMONEY_BASE_URL', 'http://118.196.34.217')}{cert['file']}",
     }
 
 
 @app.post("/multi_lang_inquiry")
-def multi_lang_inquiry(req: InquiryRequest):
+async def multi_lang_inquiry(req: InquiryRequest):
     """
     多语言询盘生成（v3.0 — DeepSeek V4 Flash 双向单次设计）
 
@@ -1599,6 +1845,7 @@ def multi_lang_inquiry(req: InquiryRequest):
     - 实际采购场景只需要 2 次翻译（buyer→zh 给工厂，工厂→buyer lang 给买家）
     - 不再过度翻译成 8 国语言
     - 旧版 8 国语言参数 target_languages 仍兼容（自动逐个翻译）
+    - async + asyncio.gather 并发执行 key_terms + translate（从串行 10-20s 降到并行 5-10s）
 
     输入:
         inquiry_text: 任意语言原文（新版）/ inquiry_zh: 中文（旧版）
@@ -1611,6 +1858,8 @@ def multi_lang_inquiry(req: InquiryRequest):
         llm_provider: DeepSeek V4 Flash
         key_terms: 提取的关键术语（避免翻译时丢失）
     """
+    import asyncio as _asyncio
+
     llm = get_llm()
     llm_available = llm.is_available()
 
@@ -1638,46 +1887,66 @@ def multi_lang_inquiry(req: InquiryRequest):
         # 旧版：源语言固定是中文
         src_lang = "zh"
 
-    # 关键术语提取（避免翻译时丢失）— 1 次 LLM 调用
-    key_terms = []
-    if llm_available and mode == "bilingual_single":
-        try:
-            key_terms = llm.extract_key_terms(src_text, src_lang)
-        except DeepSeekError as e:
-            logger.warning(f"extract_key_terms failed: {e}")
-
-    # 翻译
-    translations = {}
-    for lang in target_languages:
-        if lang not in lang_names:
-            translations[lang] = {
-                "language": lang,
-                "inquiry": src_text,  # 不支持的语言原样返回
-                "_note": f"unsupported language '{lang}', returned original",
-            }
-            continue
-
-        if lang == src_lang:
-            # 同语言不翻译
-            translations[lang] = {"language": lang_names[lang], "inquiry": src_text}
-            continue
-
-        # 尝试 DeepSeek V4 Flash 翻译
-        translated = None
-        if llm_available:
+    # bilingual_single + LLM 可用：并发执行 key_terms + translate
+    if mode == "bilingual_single" and llm_available:
+        async def _do_key_terms():
             try:
-                translated = llm.translate(src_text, src_lang, lang)
+                return await _asyncio.to_thread(llm.extract_key_terms, src_text, src_lang)
+            except DeepSeekError as e:
+                logger.warning(f"extract_key_terms failed: {e}")
+                return []
+
+        async def _do_translate(lang: str):
+            if lang not in lang_names:
+                return lang, {"language": lang, "inquiry": src_text,
+                              "_note": f"unsupported language '{lang}', returned original"}
+            if lang == src_lang:
+                return lang, {"language": lang_names[lang], "inquiry": src_text}
+            try:
+                translated = await _asyncio.to_thread(llm.translate, src_text, src_lang, lang)
             except DeepSeekError as e:
                 logger.warning(f"DeepSeek translate failed ({src_lang}→{lang}): {e}")
+                translated = None
+            if translated is None:
+                translated = f"[{lang_names[lang]} | 翻译未配置] {src_text}"
+            return lang, {"language": lang_names[lang], "inquiry": translated}
 
-        if translated is None:
-            # Fallback: 原样返回 + prefix（保证 API 永远不挂）
-            translated = f"[{lang_names[lang]} | 翻译未配置] {src_text}"
+        # 并发：key_terms + 所有翻译同时跑（总耗时 = max 而非 sum）
+        tasks = [_do_key_terms()] + [_do_translate(lang) for lang in target_languages]
+        results = await _asyncio.gather(*tasks)
+        key_terms = results[0]
+        translations = {lang: trans for lang, trans in results[1:]}
+    else:
+        # fallback 模式或旧版多语言：无 LLM 调用，串行很快
+        key_terms = []
+        translations = {}
+        for lang in target_languages:
+            if lang not in lang_names:
+                translations[lang] = {
+                    "language": lang,
+                    "inquiry": src_text,
+                    "_note": f"unsupported language '{lang}', returned original",
+                }
+                continue
 
-        translations[lang] = {
-            "language": lang_names[lang],
-            "inquiry": translated,
-        }
+            if lang == src_lang:
+                translations[lang] = {"language": lang_names[lang], "inquiry": src_text}
+                continue
+
+            translated = None
+            if llm_available:
+                try:
+                    translated = llm.translate(src_text, src_lang, lang)
+                except DeepSeekError as e:
+                    logger.warning(f"DeepSeek translate failed ({src_lang}→{lang}): {e}")
+
+            if translated is None:
+                translated = f"[{lang_names[lang]} | 翻译未配置] {src_text}"
+
+            translations[lang] = {
+                "language": lang_names[lang],
+                "inquiry": translated,
+            }
 
     return {
         "mode": mode,
@@ -1729,11 +1998,9 @@ def submit_rfq(
     buyer = _row_to_buyer(b_row)
 
     with get_db() as conn:
-        # 修复并发竞态：用毫秒级时间戳 + 数据库 COUNT 双重保证 ID 唯一
-        # 即使同毫秒两个客户端同时 SELECT COUNT，加 %f 微秒后仍可区分
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        count = conn.execute("SELECT COUNT(*) as cnt FROM rfqs").fetchone()["cnt"]
-        rfq_id = f"rfq-{ts}-{count + 1:03d}"
+        # 用 UUID4 保证全局唯一，彻底消除多 worker 微秒级碰撞
+        import uuid as _uuid
+        rfq_id = f"rfq-{datetime.now().strftime('%Y%m%d')}-{_uuid.uuid4().hex[:12]}"
         created_at = datetime.now().isoformat() + "Z"
 
         # v3.0+ — DeepSeek V4 Flash 智能解析 raw_message（买家自然语言 RFQ）
@@ -2150,6 +2417,9 @@ def send_quote(req: QuoteRequest, request: Request):
         )
     except Exception:
         pass
+
+    # 报价后失效 find_china_supplier 缓存（价格信息变了）
+    _supplier_cache.invalidate("find:")
 
     return {
         "rfq_id": req.rfq_id,
@@ -2856,6 +3126,9 @@ trust_score: {eval_result['overall_score']}
 无需单独安装。LinkMoney 总 Skill 1.0+ 已自动收录此供应商。
 """
 
+    # 新工厂注册后失效 find_china_supplier 缓存，让新工厂立即可被搜索到
+    _supplier_cache.invalidate("find:")
+
     return {
         "supplier_id": supplier_id,
         "company_name": req.company_name,
@@ -2871,7 +3144,7 @@ trust_score: {eval_result['overall_score']}
         "auto_evaluation": eval_result,
         "auto_generated_skill": {
             "skill_md_preview": skill_md[:500] + "...",
-            "full_skill_in_git": f"https://github.com/linkmoney-ai/linkmoney-skill/tree/main/skills/{supplier_id}",
+            "full_skill_in_git": f"https://linkmoney.online/skill.md?supplier={supplier_id}",
         },
         "estimated_time_to_live": "验证邮箱后 5 分钟内被海外 Agent 搜索到",
     }
@@ -3357,6 +3630,28 @@ def agent_maintain(
 
 _load_api_keys()
 init_db()
+
+# v4.0: Agent Marketplace（延迟导入，避开循环依赖）
+marketplace_router = None
+init_marketplace = lambda: None
+try:
+    import marketplace as _marketplace
+    marketplace_router = _marketplace.router
+    init_marketplace = _marketplace.init_marketplace
+    logger.info("✅ Agent Marketplace 模块加载成功")
+except Exception as _me:
+    import traceback as _tb
+    logger.warning(f"⚠️ Agent Marketplace 模块加载失败: {_me}\n{_tb.format_exc()}")
+
+# v4.0: 初始化 Agent Marketplace（公开 RFQ 市场 + 9 阶段执行 + 公正审计）
+try:
+    init_marketplace()
+    if marketplace_router is not None:
+        app.include_router(marketplace_router)
+        logger.info("✅ Agent Marketplace 路由已挂载（/marketplace/*）")
+except Exception as _e:  # noqa: BLE001
+    logger.warning(f"Agent Marketplace 初始化失败: {_e}")
+
 # v3.0: 启动时基线巡检一次，写入告警 + 维护日志
 try:
     bootstrap_agent()
