@@ -284,6 +284,24 @@ def _migrate_v21():
         """)
 
         # rfqs 表迁移（v3.0+ — DeepSeek LLM 集成后新增的 message + parsed_data 列）
+        # 先确保 rfqs 表存在（防止 DB 文件已存在但表未创建的情况）
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS rfqs (
+                id TEXT PRIMARY KEY,
+                supplier_id TEXT NOT NULL,
+                buyer_id TEXT NOT NULL,
+                sku TEXT NOT NULL,
+                quantity INTEGER DEFAULT 0,
+                target_price_usd REAL DEFAULT 0,
+                port TEXT DEFAULT '',
+                incoterms TEXT DEFAULT 'FOB',
+                status TEXT DEFAULT 'pending',
+                created_at TEXT DEFAULT '',
+                delivery_deadline TEXT DEFAULT '',
+                contact_email TEXT DEFAULT '',
+                raw_message TEXT DEFAULT ''
+            )
+        """)
         for col_name, col_type in [
             ("quoted_price_usd", "REAL DEFAULT 0"),
             ("lead_time_days", "INTEGER DEFAULT 0"),
