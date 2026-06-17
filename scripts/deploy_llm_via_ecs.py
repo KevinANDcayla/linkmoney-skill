@@ -60,6 +60,7 @@ BACKUP_DIR="/opt/linkmoney/backups/v3-llm-$TS"
 mkdir -p "$BACKUP_DIR"
 docker cp linkmoney-api:/app/server.py "$BACKUP_DIR/server.py.bak" 2>/dev/null || echo "  server.py backup skipped"
 docker cp linkmoney-api:/app/llm_layer.py "$BACKUP_DIR/llm_layer.py.bak" 2>/dev/null || echo "  llm_layer.py backup skipped"
+docker cp linkmoney-api:/app/middle_agent.py "$BACKUP_DIR/middle_agent.py.bak" 2>/dev/null || echo "  middle_agent.py backup skipped"
 docker cp linkmoney-api:/app/database.db "$BACKUP_DIR/database.db.bak" 2>/dev/null || echo "  database.db backup skipped"
 ls -la "$BACKUP_DIR"
 echo "BACKUP_DIR=$BACKUP_DIR"
@@ -76,7 +77,7 @@ echo "BACKUP_DIR=$BACKUP_DIR"
     print(f"  备份目录: {backup_dir}")
 
     # 2. 推文件（用 api.github.com 通道）
-    print("\n[3/5] 推 llm_layer.py + server.py 到容器（api.github.com 通道）...")
+    print("\n[3/5] 推 llm_layer.py + server.py + middle_agent.py 到容器（api.github.com 通道）...")
     write_cmd = r"""
 set -e
 
@@ -105,23 +106,27 @@ PY
 
 download_from_github "llm_layer.py" "/tmp/llm_layer_new.py" "14"
 download_from_github "server.py"     "/tmp/server_new.py"     "140"
+download_from_github "middle_agent.py" "/tmp/middle_agent_new.py" "25"
 
 echo ""
 echo "[ECS] 验证 import (不重启)..."
 head -3 /tmp/llm_layer_new.py
 head -3 /tmp/server_new.py
+head -3 /tmp/middle_agent_new.py
 
 echo ""
 echo "[ECS] docker cp 到容器..."
 docker cp /tmp/llm_layer_new.py linkmoney-api:/app/llm_layer.py
 docker cp /tmp/server_new.py linkmoney-api:/app/server.py
+docker cp /tmp/middle_agent_new.py linkmoney-api:/app/middle_agent.py
 
-docker exec linkmoney-api ls -la /app/llm_layer.py /app/server.py
+docker exec linkmoney-api ls -la /app/llm_layer.py /app/server.py /app/middle_agent.py
 
 echo ""
 echo "[ECS] 验证 import（容器内）..."
 docker exec linkmoney-api python3 -c "import llm_layer; print('  llm_layer OK, has DeepSeekProvider:', hasattr(llm_layer, 'DeepSeekProvider'))"
 docker exec linkmoney-api python3 -c "import server; print('  server OK, has _migrate_v21:', hasattr(server, '_migrate_v21'))"
+docker exec linkmoney-api python3 -c "import middle_agent; print('  middle_agent OK, has ThreadPoolExecutor:', 'ThreadPoolExecutor' in dir(middle_agent))"
 
 echo "[ECS] ✅ 文件已写入容器"
 """
@@ -131,6 +136,7 @@ echo "[ECS] ✅ 文件已写入容器"
         print("回滚命令:")
         print(f"  docker cp {backup_dir}/server.py.bak linkmoney-api:/app/server.py")
         print(f"  docker cp {backup_dir}/llm_layer.py.bak linkmoney-api:/app/llm_layer.py")
+        print(f"  docker cp {backup_dir}/middle_agent.py.bak linkmoney-api:/app/middle_agent.py")
         print(f"  docker compose -C /opt/linkmoney/linkmoney restart linkmoney")
         sys.exit(1)
     print(r['output'])
@@ -234,6 +240,7 @@ docker logs --tail 15 linkmoney-api 2>&1 | tail -15
     print("✅ 部署完成！")
     print(f"   BACKUP_DIR={backup_dir}")
     print(f"   回滚命令: docker cp {backup_dir}/server.py.bak linkmoney-api:/app/server.py")
+    print(f"             docker cp {backup_dir}/middle_agent.py.bak linkmoney-api:/app/middle_agent.py")
     print(f"             docker compose -C /opt/linkmoney/linkmoney restart linkmoney")
     print("=" * 60)
     return 0
