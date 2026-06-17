@@ -2050,6 +2050,16 @@ def submit_rfq(
 
     # 异步发送邮件通知供应商
     try:
+        # 如果 raw_message 是英文，翻译成中文给工厂看
+        raw_message_zh = ""
+        if raw_message and raw_message.strip():
+            try:
+                llm = get_llm()
+                if llm.is_available():
+                    raw_message_zh = llm.translate(raw_message, "en", "zh") or ""
+            except DeepSeekError as e:
+                logger.warning(f"translate raw_message for supplier email failed: {e}")
+
         mailer.notify_supplier_new_rfq(
             supplier=supplier,
             buyer=buyer if buyer else {"company": buyer_id, "country": ""},
@@ -2058,6 +2068,8 @@ def submit_rfq(
                 "target_price_usd": target_price_usd, "port": port,
                 "incoterms": incoterms, "delivery_deadline": delivery_deadline,
                 "contact_email": contact_email,
+                "raw_message": raw_message,
+                "raw_message_zh": raw_message_zh,
             },
             product_name=sku,
         )
@@ -2293,6 +2305,41 @@ def get_supplier_contact(
 
 
 # ===== 新增端点: 厂商查询自己收到的 RFQ =====
+
+@app.get("/get_rfq_status")
+def get_rfq_status(
+    request: Request,
+    rfq_id: str = Query(..., description="RFQ ID"),
+):
+    """海外买家/Agent 通过 RFQ ID 查询询盘状态（无需 supplier_id）"""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM rfqs WHERE id = ?", (rfq_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"RFQ '{rfq_id}' not found")
+    rfq = dict(row)
+    # 查供应商名
+    with get_db() as conn:
+        s = conn.execute("SELECT name_zh, name_en FROM suppliers WHERE id = ?", (rfq["supplier_id"],)).fetchone()
+    supplier_name = s["name_zh"] if s else rfq["supplier_id"]
+    supplier_name_en = s["name_en"] if s else ""
+    return {
+        "rfq_id": rfq["id"],
+        "status": rfq["status"],
+        "supplier_id": rfq["supplier_id"],
+        "supplier_name": supplier_name,
+        "supplier_name_en": supplier_name_en,
+        "sku": rfq["sku"],
+        "quantity": rfq["quantity"],
+        "target_price_usd": rfq["target_price_usd"],
+        "port": rfq["port"],
+        "incoterms": rfq["incoterms"],
+        "created_at": rfq["created_at"],
+        "quoted_at": rfq.get("quoted_at", ""),
+        "unit_price_usd": rfq.get("unit_price_usd", 0),
+        "lead_time_days": rfq.get("lead_time_days", 0),
+        "notes": rfq.get("notes", ""),
+    }
+
 
 @app.get("/get_my_rfqs")
 def get_my_rfqs(

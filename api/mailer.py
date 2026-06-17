@@ -92,14 +92,33 @@ class Mailer:
     # ---- 业务邮件模板 ----
 
     def notify_supplier_new_rfq(self, supplier: dict, buyer: dict, rfq: dict, product_name: str):
-        """通知中国供应商：有新询盘"""
+        """通知中国供应商：有新询盘（含买家中文翻译 + Agent 操作指引）"""
         original_email = supplier.get("email", "")
         to_email, suffix = self._resolve_to(original_email, f"供应商 {supplier.get('name_zh', '')}")
 
         subject = f"[LinkMoney RFQ] 您收到了来自 {buyer.get('company', '海外买家')} 的新询盘 - {product_name}{suffix}"
 
+        # API base URL（给 Agent 操作指引用）
+        base_url = os.getenv("LINKMONEY_BASE_URL", "http://118.196.34.217:8765").rstrip("/")
+        api_key = os.getenv("LINKMONEY_API_KEYS", "lm-prod-2026-key1").split(",")[0].strip()
+        supplier_id = supplier.get("id", "")
+        rfq_id = rfq["id"]
+
+        # 买家原始需求 + 中文翻译
+        raw_message = rfq.get("raw_message", "")
+        raw_message_zh = rfq.get("raw_message_zh", "")
+
+        raw_message_section = ""
+        if raw_message or raw_message_zh:
+            raw_message_section = f"""
+                <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 16px 0;">
+                    <h3 style="margin:0 0 12px; color:#0A0E27;">📋 买家需求详情</h3>
+                    {f'<p style="margin:0 0 8px;"><strong style="color:#666;">英文原文：</strong></p><p style="margin:0 0 16px; padding:12px; background:#f9fafb; border-radius:6px; white-space:pre-wrap;">{raw_message}</p>' if raw_message else ''}
+                    {f'<p style="margin:0 0 8px;"><strong style="color:#d97706;">🇨🇳 中文翻译（DeepSeek V4）：</strong></p><p style="margin:0; padding:12px; background:#fffbeb; border-radius:6px; white-space:pre-wrap;">{raw_message_zh}</p>' if raw_message_zh else ''}
+                </div>"""
+
         body = f"""
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 20px;">
             <div style="background: linear-gradient(135deg, #0A0E27, #1a1f4a); color: #fff; padding: 24px; border-radius: 12px 12px 0 0;">
                 <h1 style="margin:0; font-size:24px;">🔗 LinkMoney 新询盘通知</h1>
                 <p style="margin:8px 0 0; opacity:0.8;">Agent 时代的 B2B 贸易链接器</p>
@@ -111,7 +130,7 @@ class Mailer:
                 <p>您的 LinkMoney Skill 收到了一条来自海外采购方的询盘：</p>
 
                 <table style="width:100%; border-collapse:collapse; margin: 16px 0;">
-                    <tr><td style="padding:8px; font-weight:bold; width:120px;">RFQ 编号</td><td style="padding:8px;">{rfq['id']}</td></tr>
+                    <tr><td style="padding:8px; font-weight:bold; width:120px;">RFQ 编号</td><td style="padding:8px;"><code style="background:#e5e7eb; padding:2px 6px; border-radius:4px;">{rfq_id}</code></td></tr>
                     <tr style="background:#fff;"><td style="padding:8px; font-weight:bold;">采购方</td><td style="padding:8px;">{buyer.get('company', 'N/A')} ({buyer.get('country', 'N/A')})</td></tr>
                     <tr><td style="padding:8px; font-weight:bold;">采购方邮箱</td><td style="padding:8px;">{rfq.get('contact_email', buyer.get('email', '未提供'))}</td></tr>
                     <tr style="background:#fff;"><td style="padding:8px; font-weight:bold;">产品</td><td style="padding:8px;">{product_name} ({rfq['sku']})</td></tr>
@@ -121,18 +140,35 @@ class Mailer:
                     <tr style="background:#fff;"><td style="padding:8px; font-weight:bold;">交期要求</td><td style="padding:8px;">{rfq.get('delivery_deadline', '未指定')}</td></tr>
                 </table>
 
+                {raw_message_section}
+
                 <div style="background: #FFF3CD; border: 1px solid #FFB800; border-radius: 8px; padding: 16px; margin: 16px 0;">
                     <strong>⏰ 请尽快回复报价</strong><br>
-                    建议在 24 小时内回复报价，提高成交率。
+                    建议在 24 小时内回复报价，提高成交率。海外买家已被通知预计 5 个工作日内收到报价。
                 </div>
 
-                <div style="margin-top: 16px;">
-                    <p><strong>下一步操作：</strong></p>
-                    <ol>
-                        <li>让您的 Agent 调用 <code>get_my_rfqs?supplier_id={supplier['id']}</code> 查看完整 RFQ 详情</li>
-                        <li>准备好报价后，让 Agent 调用 <code>send_quote</code> 发送报价给采购方</li>
-                        <li>或直接回复此邮件联系采购方</li>
-                    </ol>
+                <div style="background: #0A0E27; color: #fff; border-radius: 8px; padding: 16px; margin: 16px 0;">
+                    <h3 style="margin:0 0 12px; color:#60A5FA;">🤖 Agent 操作指引（可直接复制给 Agent 执行）</h3>
+                    <p style="margin:0 0 8px; opacity:0.9;">您的 Agent 可通过以下 API 完成报价回复：</p>
+
+                    <p style="margin:12px 0 6px; color:#60A5FA; font-size:13px;"><strong>步骤 1：查看 RFQ 详情</strong></p>
+                    <pre style="background:#1a1f4a; padding:12px; border-radius:6px; overflow-x:auto; font-size:12px; color:#e5e7eb;">curl -X GET "{base_url}/get_my_rfqs?supplier_id={supplier_id}&status=pending" \\
+  -H "X-API-Key: {api_key}"</pre>
+
+                    <p style="margin:12px 0 6px; color:#60A5FA; font-size:13px;"><strong>步骤 2：发送报价（替换价格为您的实际报价）</strong></p>
+                    <pre style="background:#1a1f4a; padding:12px; border-radius:6px; overflow-x:auto; font-size:12px; color:#e5e7eb;">curl -X POST "{base_url}/send_quote" \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: {api_key}" \\
+  -d '{{"rfq_id":"{rfq_id}","supplier_id":"{supplier_id}","unit_price_usd":0.075,"lead_time_days":15,"total_price_usd":3750,"notes":"含食品级认证，FOB 宁波"}}'</pre>
+
+                    <p style="margin:12px 0 6px; color:#60A5FA; font-size:13px;"><strong>步骤 3：查看买家联系方式（已装 Skill 可见）</strong></p>
+                    <pre style="background:#1a1f4a; padding:12px; border-radius:6px; overflow-x:auto; font-size:12px; color:#e5e7eb;">curl -X GET "{base_url}/get_supplier_contact?supplier_id={supplier_id}" \\
+  -H "X-API-Key: {api_key}"</pre>
+                </div>
+
+                <div style="background: #E2E3FF; border-radius: 8px; padding: 12px; margin: 16px 0;">
+                    <strong>💡 也可以直接回复此邮件</strong><br>
+                    回复邮件将直接发送到采购方邮箱：{rfq.get('contact_email', buyer.get('email', 'N/A'))}
                 </div>
             </div>
 
@@ -150,6 +186,11 @@ class Mailer:
         to_email, suffix = self._resolve_to(original_email, f"采购方 {buyer.get('company', '')}")
 
         subject = f"[LinkMoney] Your RFQ #{rfq['id']} has been received - {len(matches)} Chinese factories matched{suffix}"
+
+        # API base URL（给 Agent 查询指引用）
+        base_url = os.getenv("LINKMONEY_BASE_URL", "http://118.196.34.217:8765").rstrip("/")
+        api_key = os.getenv("LINKMONEY_API_KEYS", "lm-prod-2026-key1").split(",")[0].strip()
+        rfq_id = rfq["id"]
 
         # 构建匹配工厂列表（最多 5 家）
         factory_rows = ""
@@ -210,13 +251,24 @@ class Mailer:
                     You can expect a formal quote within <strong>5 business days</strong>.
                 </div>
 
+                <div style="background: #0A0E27; color: #fff; border-radius: 8px; padding: 16px; margin: 16px 0;">
+                    <h3 style="margin:0 0 12px; color:#60A5FA;">🤖 Agent Query Guide</h3>
+                    <p style="margin:0 0 8px; opacity:0.9;">Your Agent can track this RFQ via API:</p>
+
+                    <p style="margin:12px 0 6px; color:#60A5FA; font-size:13px;"><strong>Check RFQ Status</strong></p>
+                    <pre style="background:#1a1f4a; padding:12px; border-radius:6px; overflow-x:auto; font-size:12px; color:#e5e7eb;">curl -X GET "{base_url}/get_rfq_status?rfq_id={rfq_id}" \\
+  -H "X-API-Key: {api_key}"</pre>
+
+                    <p style="margin:8px 0 0; opacity:0.7; font-size:12px;">RFQ ID: <code style="background:#1a1f4a; padding:2px 6px; border-radius:4px;">{rfq_id}</code></p>
+                </div>
+
                 <div style="margin-top: 16px;">
                     <p><strong>What happens next?</strong></p>
                     <ol>
-                        <li>The factory reviews your RFQ and prepares a quote</li>
-                        <li>You'll receive another email when the quote is ready</li>
-                        <li>Your Agent can check status anytime: <code>get_my_rfqs</code></li>
+                        <li>The factory <strong>{supplier.get('name_en', supplier.get('name_zh', ''))}</strong> reviews your RFQ and prepares a quote</li>
+                        <li>You'll receive another email when the quote is ready (within 5 business days)</li>
                         <li>Factories with <strong>🔧 Skill Installed</strong> support real-time pricing via MCP</li>
+                        <li>Your Agent can check status anytime using the API above</li>
                     </ol>
                 </div>
 
