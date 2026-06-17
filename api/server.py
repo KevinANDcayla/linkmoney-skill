@@ -2064,13 +2064,60 @@ def submit_rfq(
     except Exception:
         pass  # 邮件发送失败不影响RFQ提交
 
+    # 异步发送邮件通知海外买家（含匹配到的工厂列表 + 5 工作日回复预期）
+    try:
+        # 查同品类其他匹配工厂（给买家邮件展示用，最多 5 家）
+        with get_db() as conn:
+            other_rows = conn.execute(
+                "SELECT * FROM suppliers WHERE category = ? AND id != ? LIMIT 4",
+                (supplier.get("category", ""), supplier_id),
+            ).fetchall()
+
+        matches_for_buyer = [{
+            "supplier_id": supplier["id"],
+            "name_zh": supplier["name_zh"],
+            "name_en": supplier.get("name_en", ""),
+            "location": supplier.get("location", {}),
+            "certifications": [c["type"] if isinstance(c, dict) else c for c in supplier.get("certifications", [])],
+            "match_score": 100,  # 被选中的工厂
+            "moq": supplier.get("moq", 0),
+            "has_skill": supplier.get("agent_skill_installed", False),
+            "mcp_endpoint": supplier.get("skill_mcp_endpoint", "") if supplier.get("agent_skill_installed") else "",
+        }]
+        for r in other_rows:
+            s = _row_to_supplier(r)
+            matches_for_buyer.append({
+                "supplier_id": s["id"],
+                "name_zh": s["name_zh"],
+                "name_en": s.get("name_en", ""),
+                "location": s.get("location", {}),
+                "certifications": [c["type"] if isinstance(c, dict) else c for c in s.get("certifications", [])],
+                "match_score": 80,  # 同品类备选
+                "moq": s.get("moq", 0),
+                "has_skill": s.get("agent_skill_installed", False),
+                "mcp_endpoint": s.get("skill_mcp_endpoint", "") if s.get("agent_skill_installed") else "",
+            })
+
+        mailer.notify_buyer_rfq_received(
+            buyer=buyer if buyer else {"company": buyer_id, "email": contact_email},
+            supplier=supplier,
+            rfq={
+                "id": rfq_id, "sku": sku, "quantity": quantity,
+                "target_price_usd": target_price_usd, "port": port,
+                "incoterms": incoterms, "contact_email": contact_email,
+            },
+            matches=matches_for_buyer,
+        )
+    except Exception as e:
+        logger.warning(f"notify_buyer_rfq_received failed for {rfq_id}: {e}")
+
     return {
         "rfq_id": rfq_id,
         "status": "submitted",
         "supplier_name": supplier["name_zh"],
         "buyer_company": buyer["company"] if buyer else buyer_id,
-        "estimated_response_time": "5 分钟内",
-        "next_step": "中国供应商将收到 RFQ 邮件通知，预计 5 分钟内响应。供应商也可通过 get_my_rfqs 查询。",
+        "estimated_response_time": "5 个工作日",
+        "next_step": "中国供应商已收到 RFQ 邮件通知，预计 5 个工作日内回复正式报价。海外买家也已收到匹配工厂列表邮件。可调用 get_my_rfqs 查询进度。",
     }
 
 
