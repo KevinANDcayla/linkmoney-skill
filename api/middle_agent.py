@@ -553,6 +553,28 @@ def bootstrap_agent() -> None:
 
 # ===== 对外 API 封装（供 server.py 路由调用） =====
 
+def report_ts_alert(severity: str, audit_type: str, reasons: list, details: dict) -> dict:
+    """供 server.py 调用：记录 Trust & Safety 审核告警到中间层告警系统
+
+    severity: "info" / "warn" / "critical"
+    audit_type: "buyer_inquiry" / "supplier_quote" / "supplier_registration"
+    reasons: 审核原因列表
+    details: 审核详情
+    """
+    try:
+        alert = _alert_store.add(
+            severity=severity,
+            category=f"trust_safety_{audit_type}",
+            message=f"T&S {audit_type} {severity}: {', '.join(reasons[:3])}",
+            source="trust_safety",
+            payload={"reasons": reasons, "details": details},
+        )
+        return alert
+    except Exception as e:
+        _log().warning(f"report_ts_alert failed: {e}")
+        return {}
+
+
 def middle_agent_status() -> dict:
     """Agent 自身状态 + 当前健康度概览。"""
     report = _load_health_index()

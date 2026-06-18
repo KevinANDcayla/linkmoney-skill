@@ -2015,6 +2015,47 @@ def submit_rfq(
 
     buyer = _row_to_buyer(b_row)
 
+    # ===== Trust & Safety 审核买家询单 =====
+    try:
+        from trust_safety import audit_buyer_inquiry
+        audit = audit_buyer_inquiry(
+            email=contact_email or buyer.get("email", ""),
+            raw_message=raw_message,
+            quantity=quantity,
+            target_price_usd=target_price_usd,
+            category=supplier.get("category", ""),
+            llm_provider=get_llm() if get_llm().is_available() else None,
+        )
+        if audit.blocked:
+            logger.warning(f"[T&S BLOCK] submit_rfq blocked: {audit.reasons}")
+            try:
+                from middle_agent import report_ts_alert
+                report_ts_alert("critical", "buyer_inquiry", audit.reasons, audit.details)
+            except Exception:
+                pass
+            raise HTTPException(status_code=400, detail={
+                "error": "RFQ blocked by Trust & Safety audit",
+                "reasons": audit.reasons,
+                "audit": audit.to_dict(),
+            })
+        if audit.level == "review":
+            logger.info(f"[T&S REVIEW] submit_rfq flagged: {audit.reasons}")
+            try:
+                from middle_agent import report_ts_alert
+                report_ts_alert("warn", "buyer_inquiry", audit.reasons, audit.details)
+            except Exception:
+                pass
+        # 审核结果存入 parsed_data，供后续追溯
+        _ts_audit = audit.to_dict()
+    except ImportError:
+        _ts_audit = None
+        logger.warning("trust_safety module not available, skipping audit")
+    except HTTPException:
+        raise
+    except Exception as e:
+        _ts_audit = None
+        logger.warning(f"Trust & Safety audit failed: {e}")
+
     with get_db() as conn:
         # 用 UUID4 保证全局唯一，彻底消除多 worker 微秒级碰撞
         import uuid as _uuid
@@ -2048,10 +2089,11 @@ def submit_rfq(
             if (not target_price_usd or target_price_usd == 0) and parsed_rfq.get("target_price_usd"):
                 target_price_usd = float(parsed_rfq["target_price_usd"])
 
-        # rfq_message 字段存原始 raw_message + 解析结果
+        # rfq_message 字段存原始 raw_message + 解析结果 + T&S 审核结果
         rfq_message_json = json.dumps({
             "raw": raw_message,
             "parsed": parsed_rfq,
+            "ts_audit": _ts_audit,
         }, ensure_ascii=False) if raw_message else None
 
         conn.execute("""
@@ -2494,6 +2536,54 @@ def send_quote(req: QuoteRequest, request: Request):
     # 校验状态
     if rfq["status"] != "pending":
         raise HTTPException(status_code=400, detail=f"RFQ is already {rfq['status']}, cannot quote again")
+
+    # ===== Trust & Safety 审核工厂报价 =====
+    try:
+        from trust_safety import audit_supplier_quote
+        # 获取供应商 category + trust_score + moq
+        with get_db() as conn:
+            s = conn.execute("SELECT category, moq, trust_score FROM suppliers WHERE id = ?",
+                             (req.supplier_id,)).fetchone()
+        supplier_cat = s["category"] if s else ""
+        supplier_moq = s["moq"] if s else 0
+        supplier_trust = s["trust_score"] if s and s["trust_score"] else 100
+
+        quote_audit = audit_supplier_quote(
+            unit_price_usd=req.unit_price_usd,
+            target_price_usd=rfq["target_price_usd"] or 0,
+            quantity=rfq["quantity"],
+            lead_time_days=req.lead_time_days,
+            moq=supplier_moq,
+            category=supplier_cat,
+            supplier_trust_score=supplier_trust,
+        )
+        if quote_audit.blocked:
+            logger.warning(f"[T&S BLOCK] send_quote blocked: {quote_audit.reasons}")
+            try:
+                from middle_agent import report_ts_alert
+                report_ts_alert("critical", "supplier_quote", quote_audit.reasons, quote_audit.details)
+            except Exception:
+                pass
+            raise HTTPException(status_code=400, detail={
+                "error": "Quote blocked by Trust & Safety audit",
+                "reasons": quote_audit.reasons,
+                "audit": quote_audit.to_dict(),
+            })
+        if quote_audit.level == "review":
+            logger.info(f"[T&S REVIEW] send_quote flagged: {quote_audit.reasons}")
+            try:
+                from middle_agent import report_ts_alert
+                report_ts_alert("warn", "supplier_quote", quote_audit.reasons, quote_audit.details)
+            except Exception:
+                pass
+        _quote_ts_audit = quote_audit.to_dict()
+    except ImportError:
+        _quote_ts_audit = None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _quote_ts_audit = None
+        logger.warning(f"Quote T&S audit failed: {e}")
 
     total = req.total_price_usd if req.total_price_usd > 0 else round(req.unit_price_usd * rfq["quantity"], 2)
 
@@ -3115,6 +3205,45 @@ def register_supplier(req: RegisterSupplierRequest):
         ).fetchone()
         if existing:
             raise HTTPException(status_code=409, detail=f"该邮箱已注册为供应商 {existing['id']}")
+
+    # ===== Trust & Safety 审核工厂注册信息 =====
+    try:
+        from trust_safety import audit_supplier_registration
+        reg_audit = audit_supplier_registration(
+            company_name=req.company_name,
+            email=req.email,
+            phone=req.phone or "",
+            uscc=getattr(req, "uscc", ""),
+            country="CN",
+            llm_provider=get_llm() if get_llm().is_available() else None,
+        )
+        if reg_audit.blocked:
+            logger.warning(f"[T&S BLOCK] register_supplier blocked: {reg_audit.reasons}")
+            try:
+                from middle_agent import report_ts_alert
+                report_ts_alert("critical", "supplier_registration", reg_audit.reasons, reg_audit.details)
+            except Exception:
+                pass
+            raise HTTPException(status_code=400, detail={
+                "error": "Registration blocked by Trust & Safety audit",
+                "reasons": reg_audit.reasons,
+                "audit": reg_audit.to_dict(),
+            })
+        if reg_audit.level == "review":
+            logger.info(f"[T&S REVIEW] register_supplier flagged: {reg_audit.reasons}")
+            try:
+                from middle_agent import report_ts_alert
+                report_ts_alert("warn", "supplier_registration", reg_audit.reasons, reg_audit.details)
+            except Exception:
+                pass
+        _reg_ts_audit = reg_audit.to_dict()
+    except ImportError:
+        _reg_ts_audit = None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _reg_ts_audit = None
+        logger.warning(f"Registration T&S audit failed: {e}")
 
     supplier_id = _slugify_supplier_id(req.company_name, req.category)
     name_en = req.company_name  # 简化：英文名=中文名
