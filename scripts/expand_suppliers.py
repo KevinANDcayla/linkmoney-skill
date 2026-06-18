@@ -99,6 +99,24 @@ CAT_TO_SUFFIX = {
     "furniture": "furniture",
 }
 
+# 支付与质保选项
+PAYMENT_TERMS = ["T/T, L/C, PayPal", "T/T, Western Union", "L/C, T/T", "T/T 30% deposit", "PayPal, T/T"]
+WARRANTY_OPTIONS = ["12 months", "24 months", "6 months", "18 months", "36 months"]
+
+# 海关编码（按主品类）
+HS_CODES = {
+    "fastener": ["73181500", "73181600", "73169100", "73182400", "73182200"],
+    "hardware": ["83024100", "83024900", "76169910", "84821000", "83029100"],
+    "electronics": ["85366900", "85444290", "85340090", "85414300", "90318090"],
+    "electronic": ["85366900", "85444290", "85340090", "85414300", "90318090"],
+    "injection_molding": ["39269090", "84807190", "39232900", "39241000"],
+    "machinery": ["84581100", "84595100", "84224000", "84795000", "84145990"],
+    "textile": ["52083100", "54076100", "55081000", "58061000", "54023300"],
+    "packaging": ["48191000", "48192000", "39232100", "48211000", "39232900"],
+    "auto_parts": ["87083000", "87089900", "87083010", "87084000", "87088000"],
+    "furniture": ["94035099", "94031080", "94016190", "94036099", "94032080"],
+}
+
 # ====================================================================
 # 产业带配置
 # ====================================================================
@@ -1206,8 +1224,490 @@ PRODUCT_GENERATORS = {
 }
 
 
+# ====================================================================
+# 属性生成器（按品类，对齐 Alibaba attributes）
+# ====================================================================
+
+def _attrs_fastener(p):
+    specs = p.get("specs", {})
+    grade = p.get("grade", "")
+    diameter = specs.get("diameter_mm", 6)
+    pitch = specs.get("thread_pitch", round(diameter * 0.125, 2))
+    standards = ["DIN 933", "DIN 931", "DIN 934", "DIN 125", "DIN 127",
+                 "DIN 912", "GB 5783", "GB 6170", "GB 818",
+                 "ISO 4017", "ISO 4032", "ISO 7040"]
+    finishes = ["本色", "镀锌", "发黑", "达克罗", "热镀锌", "钝化"]
+    if "A2" in grade:
+        tensile, hardness = "700", random.choice(["200", "220", "240"])
+    elif "A4" in grade:
+        tensile, hardness = "800", random.choice(["240", "260", "280"])
+    elif grade == "4.8":
+        tensile, hardness = "400", random.choice(["130", "140", "150"])
+    elif grade == "8.8":
+        tensile, hardness = "800", random.choice(["240", "250", "260"])
+    elif grade == "10.9":
+        tensile, hardness = "1000", random.choice(["320", "340", "350"])
+    else:
+        tensile, hardness = random.choice(["400", "500", "700"]), random.choice(["150", "200", "240"])
+    return [
+        {"name": "标准", "value": random.choice(standards), "unit": ""},
+        {"name": "表面处理", "value": random.choice(finishes), "unit": ""},
+        {"name": "抗拉强度", "value": tensile, "unit": "MPa"},
+        {"name": "硬度", "value": hardness, "unit": "HV"},
+        {"name": "螺纹规格", "value": f"M{diameter} x {pitch}", "unit": ""},
+    ]
+
+
+def _attrs_hardware(p):
+    specs = p.get("specs", {})
+    material = p.get("material", "")
+    finishes = ["抛光", "拉丝", "镀铬", "喷涂", "电泳", "镀锌"]
+    scenes = ["家用门", "工业设备", "家具", "建筑", "门窗", "橱柜"]
+    if "size_inch" in specs:
+        size = f'{specs["size_inch"]}英寸'
+    elif "length_mm" in specs:
+        size = f'{specs["length_mm"]}mm'
+    elif "thickness_mm" in specs:
+        size = f'{specs["thickness_mm"]}mm'
+    elif "model" in specs:
+        size = str(specs["model"])
+    else:
+        size = "标准"
+    return [
+        {"name": "材质", "value": material, "unit": ""},
+        {"name": "表面处理", "value": random.choice(finishes), "unit": ""},
+        {"name": "尺寸", "value": size, "unit": ""},
+        {"name": "承载", "value": str(random.choice([50, 100, 150, 200, 300, 500])), "unit": "kg"},
+        {"name": "适用场景", "value": random.choice(scenes), "unit": ""},
+    ]
+
+
+def _attrs_electronics(p):
+    specs = p.get("specs", {})
+    voltages = ["3.3V", "5V", "12V", "24V", "48V", "220V"]
+    temps = ["-40~85°C", "-25~70°C", "0~70°C", "-20~60°C"]
+    packages = ["SMD", "DIP", "QFN", "BGA", "LCC"]
+    voltage = specs.get("voltage", random.choice(voltages))
+    return [
+        {"name": "型号", "value": p.get("sku", ""), "unit": ""},
+        {"name": "封装", "value": random.choice(packages), "unit": ""},
+        {"name": "工作电压", "value": str(voltage), "unit": ""},
+        {"name": "工作温度", "value": random.choice(temps), "unit": ""},
+        {"name": "封装形式", "value": random.choice(["Tape & Reel", "Tray", "Tube", "Bulk"]), "unit": ""},
+    ]
+
+
+def _attrs_textile(p):
+    specs = p.get("specs", {})
+    material = p.get("material", "")
+    weight = specs.get("weight_gsm", random.choice([150, 180, 200]))
+    width = specs.get("width_cm", random.choice([150, 180, 220]))
+    return [
+        {"name": "成分", "value": material, "unit": ""},
+        {"name": "克重", "value": str(weight), "unit": "gsm"},
+        {"name": "门幅", "value": str(width), "unit": "cm"},
+        {"name": "色牢度", "value": random.choice(["4级", "4-5级", "5级"]), "unit": ""},
+        {"name": "工艺", "value": random.choice(["精梳", "梳棉", "环锭纺", "气流纺", "针织", "梭织"]), "unit": ""},
+    ]
+
+
+def _attrs_packaging(p):
+    specs = p.get("specs", {})
+    material = p.get("material", "")
+    if "ply" in specs:
+        thickness = f'{specs["ply"]}层'
+    else:
+        thickness = random.choice(["0.5mm", "1.0mm", "1.5mm", "2.0mm"])
+    size = str(specs.get("size_mm", "标准"))
+    return [
+        {"name": "材质", "value": material, "unit": ""},
+        {"name": "厚度", "value": thickness, "unit": ""},
+        {"name": "尺寸", "value": size, "unit": ""},
+        {"name": "印刷", "value": random.choice(["CMYK", "专色", "CMYK+专色", "单色", "无印刷"]), "unit": ""},
+        {"name": "环保认证", "value": random.choice(["FSC", "SGS", "FDA", "REACH", "ISO 14001"]), "unit": ""},
+    ]
+
+
+def _attrs_machinery(p):
+    specs = p.get("specs", {})
+    powers = ["3kW", "5.5kW", "7.5kW", "15kW", "22kW", "30kW"]
+    voltages = ["220V/50Hz", "380V/50Hz", "440V/60Hz", "220V/60Hz"]
+    controls = ["PLC + HMI", "CNC", "FANUC 0i-TF", "Siemens 808D", "Mitsubishi M70"]
+    capacities = ["30-60 ppm", "100-200 pcs/min", "500-1000 pcs/h", "10-20 m/min"]
+    return [
+        {"name": "型号", "value": str(specs.get("model", p.get("sku", ""))), "unit": ""},
+        {"name": "功率", "value": random.choice(powers), "unit": ""},
+        {"name": "产能", "value": random.choice(capacities), "unit": ""},
+        {"name": "电压", "value": random.choice(voltages), "unit": ""},
+        {"name": "控制系统", "value": random.choice(controls), "unit": ""},
+    ]
+
+
+def _attrs_injection_molding(p):
+    specs = p.get("specs", {})
+    material = p.get("material", "")
+    materials = ["ABS", "PC", "PP", "PE", "PA66", "POM", "PMMA", "PC+ABS"]
+    shrinkage = random.choice(["0.3%", "0.5%", "0.8%", "1.0%", "1.5%", "2.0%"])
+    life = random.choice(["50万次", "100万次", "200万次", "500万次"])
+    finishes = ["喷油", "丝印", "电镀", "咬花", "抛光", "UV喷涂"]
+    return [
+        {"name": "材料", "value": material if material else random.choice(materials), "unit": ""},
+        {"name": "收缩率", "value": shrinkage, "unit": ""},
+        {"name": "模具寿命", "value": life, "unit": ""},
+        {"name": "表面处理", "value": random.choice(finishes), "unit": ""},
+    ]
+
+
+def _attrs_auto_parts(p):
+    specs = p.get("specs", {})
+    car = specs.get("car_model", random.choice(["Toyota", "Honda", "VW", "BMW", "Mercedes", "Ford"]))
+    oe_num = f"OE-{random.randint(10000, 99999)}"
+    positions = ["前轮", "后轮", "发动机", "底盘", "悬挂", "传动", "制动", "排气"]
+    certs = ["ISO/TS 16949", "ECE R90", "DOT", "IATF 16949"]
+    return [
+        {"name": "适用车型", "value": car, "unit": ""},
+        {"name": "OE号", "value": oe_num, "unit": ""},
+        {"name": "材质", "value": p.get("material", ""), "unit": ""},
+        {"name": "认证", "value": random.choice(certs), "unit": ""},
+        {"name": "安装位置", "value": random.choice(positions), "unit": ""},
+    ]
+
+
+def _attrs_furniture(p):
+    specs = p.get("specs", {})
+    material = p.get("material", "")
+    styles = ["现代", "北欧", "工业", "中式", "美式", "简约"]
+    assemblies = ["拆装", "整装", "KD(拆装)"]
+    size = str(specs.get("size_cm", specs.get("size", random.choice(["120x60cm", "140x70cm", "160x80cm"]))))
+    return [
+        {"name": "材质", "value": material, "unit": ""},
+        {"name": "尺寸", "value": size, "unit": ""},
+        {"name": "承重", "value": str(random.choice([100, 150, 200, 300])), "unit": "kg"},
+        {"name": "风格", "value": random.choice(styles), "unit": ""},
+        {"name": "组装方式", "value": random.choice(assemblies), "unit": ""},
+    ]
+
+
+def _attrs_default(p):
+    return [
+        {"name": "材质", "value": p.get("material", ""), "unit": ""},
+        {"name": "等级", "value": p.get("grade", ""), "unit": ""},
+    ]
+
+
+_ATTR_GENERATORS = {
+    "fastener": _attrs_fastener,
+    "hardware": _attrs_hardware,
+    "electronics": _attrs_electronics,
+    "electronic": _attrs_electronics,
+    "textile": _attrs_textile,
+    "packaging": _attrs_packaging,
+    "machinery": _attrs_machinery,
+    "injection_molding": _attrs_injection_molding,
+    "auto_parts": _attrs_auto_parts,
+    "furniture": _attrs_furniture,
+}
+
+
+# ====================================================================
+# 描述生成器（按品类，中英文，含用途场景）
+# ====================================================================
+
+def _desc_fastener(p):
+    name_zh, name_en = p.get("name_zh", ""), p.get("name_en", "")
+    grade, material = p.get("grade", ""), p.get("material", "")
+    use_zh = random.choice([
+        "适用于机械装配、建筑连接、户外设备等场景",
+        "广泛应用于钢结构工程、桥梁建设、电力设施",
+        "适用于汽车制造、轨道交通、船舶装配",
+        "用于家具组装、家电制造、五金制品",
+        "适用于光伏支架、风电设备、通信基站",
+    ])
+    use_en = random.choice([
+        "Suitable for mechanical assembly, construction, outdoor equipment",
+        "Widely used in steel structure, bridge construction, power facilities",
+        "Applied in automotive, railway, shipbuilding assembly",
+        "Used for furniture, home appliance, hardware products",
+        "Suitable for solar mounting, wind power, telecom towers",
+    ])
+    if "Stainless" in material:
+        feat_zh, feat_en = "耐腐蚀、防松动", "Corrosion resistant, anti-loosening"
+    else:
+        feat_zh, feat_en = "高强度、防锈", "High strength, anti-rust"
+    return (f"{name_zh}，{grade}级别。{use_zh}。{feat_zh}，通过ISO 9001质量体系认证。",
+            f"{name_en}, {grade} grade. {use_en}. {feat_en}, ISO 9001 certified.")
+
+
+def _desc_hardware(p):
+    name_zh, name_en = p.get("name_zh", ""), p.get("name_en", "")
+    material = p.get("material", "")
+    use_zh = random.choice([
+        "适用于家用门窗、橱柜、家具五金配件",
+        "广泛应用于建筑装饰、工业设备、五金制品",
+        "适用于汽车配件、电子外壳、机械设备",
+        "用于厨卫五金、户外设施、安防设备",
+    ])
+    use_en = random.choice([
+        "Suitable for doors, windows, cabinets, furniture hardware",
+        "Widely used in construction, industrial equipment, hardware",
+        "Applied in automotive parts, electronic enclosures, machinery",
+        "Used for kitchen, bathroom, outdoor facilities, security",
+    ])
+    return (f"{name_zh}，{material}材质。{use_zh}。精密加工，表面光洁，耐用防腐。",
+            f"{name_en}, {material}. {use_en}. Precision machined, smooth surface, durable and anti-corrosion.")
+
+
+def _desc_electronics(p):
+    name_zh, name_en = p.get("name_zh", ""), p.get("name_en", "")
+    use_zh = random.choice([
+        "适用于消费电子、智能家居、工业控制",
+        "广泛应用于通信设备、汽车电子、医疗器械",
+        "适用于电源系统、LED照明、安防监控",
+        "用于工控主板、物联网设备、测试仪器",
+    ])
+    use_en = random.choice([
+        "Suitable for consumer electronics, smart home, industrial control",
+        "Widely used in telecom, automotive electronics, medical devices",
+        "Applied in power systems, LED lighting, security surveillance",
+        "Used for industrial motherboards, IoT devices, test instruments",
+    ])
+    return (f"{name_zh}。{use_zh}。符合RoHS标准，性能稳定，批量供应。",
+            f"{name_en}. {use_en}. RoHS compliant, stable performance, bulk supply available.")
+
+
+def _desc_textile(p):
+    name_zh, name_en = p.get("name_zh", ""), p.get("name_en", "")
+    material = p.get("material", "")
+    use_zh = random.choice([
+        "适用于服装面料、家纺制品、箱包鞋帽",
+        "广泛应用于产业用布、过滤材料、装饰布艺",
+        "适用于运动服饰、户外装备、医疗纺织品",
+        "用于工装制服、酒店布草、汽车内饰",
+    ])
+    use_en = random.choice([
+        "Suitable for garments, home textiles, bags and shoes",
+        "Widely used in industrial fabric, filtration, decoration",
+        "Applied in sportswear, outdoor gear, medical textiles",
+        "Used for workwear, hotel linen, automotive interior",
+    ])
+    return (f"{name_zh}，{material}。{use_zh}。色牢度高，环保染色，可定制。",
+            f"{name_en}, {material}. {use_en}. High color fastness, eco-friendly dyeing, customizable.")
+
+
+def _desc_packaging(p):
+    name_zh, name_en = p.get("name_zh", ""), p.get("name_en", "")
+    material = p.get("material", "")
+    use_zh = random.choice([
+        "适用于食品包装、礼品包装、电子产品包装",
+        "广泛应用于电商物流、日化用品、医药包装",
+        "适用于鞋类包装、文具用品、工艺品包装",
+        "用于工业品包装、出口贸易、品牌定制",
+    ])
+    use_en = random.choice([
+        "Suitable for food, gift, and electronics packaging",
+        "Widely used in e-commerce, daily chemicals, pharmaceuticals",
+        "Applied in shoe packaging, stationery, crafts",
+        "Used for industrial products, export trade, brand customization",
+    ])
+    return (f"{name_zh}，{material}材质。{use_zh}。环保印刷，支持定制尺寸和LOGO。",
+            f"{name_en}, {material}. {use_en}. Eco-friendly printing, custom size and LOGO supported.")
+
+
+def _desc_machinery(p):
+    name_zh, name_en = p.get("name_zh", ""), p.get("name_en", "")
+    use_zh = random.choice([
+        "适用于工厂生产线、批量加工、自动化改造",
+        "广泛应用于汽车制造、电子装配、五金加工",
+        "适用于食品包装、医药生产、日化制造",
+        "用于金属加工、模具制造、精密零件",
+    ])
+    use_en = random.choice([
+        "Suitable for production lines, batch processing, automation",
+        "Widely used in automotive, electronics, hardware manufacturing",
+        "Applied in food packaging, pharmaceuticals, daily chemicals",
+        "Used for metalworking, mold making, precision parts",
+    ])
+    return (f"{name_zh}。{use_zh}。PLC控制，操作简便，售后完善，可非标定制。",
+            f"{name_en}. {use_en}. PLC controlled, easy operation, full after-sales service, customizable.")
+
+
+def _desc_injection_molding(p):
+    name_zh, name_en = p.get("name_zh", ""), p.get("name_en", "")
+    material = p.get("material", "")
+    use_zh = random.choice([
+        "适用于电子产品外壳、家电配件、汽车内饰",
+        "广泛应用于日用品、医疗器械、玩具制品",
+        "适用于包装容器、储物盒、办公用品",
+        "用于精密零件、连接器、传感器外壳",
+    ])
+    use_en = random.choice([
+        "Suitable for electronic enclosures, appliance parts, automotive interior",
+        "Widely used in daily products, medical devices, toys",
+        "Applied in packaging containers, storage, office supplies",
+        "Used for precision parts, connectors, sensor housings",
+    ])
+    if "mold" in p.get("category", "").lower() or "模具" in name_zh:
+        return (f"{name_zh}。{use_zh}。精密加工，寿命长，可定制型腔。",
+                f"{name_en}. {use_en}. Precision machined, long life, custom cavities available.")
+    return (f"{name_zh}，{material}材质。{use_zh}。注塑成型，尺寸稳定，可定制颜色。",
+            f"{name_en}, {material}. {use_en}. Injection molded, stable dimensions, custom colors.")
+
+
+def _desc_auto_parts(p):
+    name_zh, name_en = p.get("name_zh", ""), p.get("name_en", "")
+    specs = p.get("specs", {})
+    car = specs.get("car_model", "")
+    use_zh = random.choice([
+        "适用于乘用车售后维修、4S店配件供应",
+        "广泛应用于商用车、工程机械、特种车辆",
+        "适用于汽车改装、维修保养、配件批发",
+        "用于出口贸易、汽配市场、线上销售",
+    ])
+    use_en = random.choice([
+        "Suitable for aftermarket repair, 4S dealership supply",
+        "Widely used in commercial vehicles, construction machinery",
+        "Applied in modification, maintenance, parts wholesale",
+        "Used for export, auto parts market, online sales",
+    ])
+    car_zh = f"适用{car}车型。" if car else ""
+    car_en = f" for {car}." if car else ""
+    return (f"{name_zh}。{car_zh}{use_zh}。OEM品质，通过IATF 16949认证。",
+            f"{name_en}{car_en} {use_en}. OEM quality, IATF 16949 certified.")
+
+
+def _desc_furniture(p):
+    name_zh, name_en = p.get("name_zh", ""), p.get("name_en", "")
+    material = p.get("material", "")
+    use_zh = random.choice([
+        "适用于家庭客厅、卧室、书房等居家场景",
+        "广泛应用于办公室、会议室、接待大厅",
+        "适用于酒店、餐厅、咖啡厅等商业空间",
+        "用于户外阳台、庭院、露台等休闲场所",
+    ])
+    use_en = random.choice([
+        "Suitable for living room, bedroom, study at home",
+        "Widely used in offices, meeting rooms, reception halls",
+        "Applied in hotels, restaurants, cafes, commercial spaces",
+        "Used for balconies, gardens, patios, outdoor leisure",
+    ])
+    return (f"{name_zh}，{material}材质。{use_zh}。环保工艺，结构稳固，可定制。",
+            f"{name_en}, {material}. {use_en}. Eco-friendly, sturdy structure, customizable.")
+
+
+def _desc_default(p):
+    name_zh, name_en = p.get("name_zh", ""), p.get("name_en", "")
+    return f"{name_zh}。优质产品，批量供应。", f"{name_en}. Quality product, bulk supply."
+
+
+_DESC_GENERATORS = {
+    "fastener": _desc_fastener,
+    "hardware": _desc_hardware,
+    "electronics": _desc_electronics,
+    "electronic": _desc_electronics,
+    "textile": _desc_textile,
+    "packaging": _desc_packaging,
+    "machinery": _desc_machinery,
+    "injection_molding": _desc_injection_molding,
+    "auto_parts": _desc_auto_parts,
+    "furniture": _desc_furniture,
+}
+
+
+# ====================================================================
+# 产品扩展函数（对齐 Alibaba attributes + schema.org Product）
+# ====================================================================
+
+def _generate_images(supplier_id, sku):
+    """生成 2-3 张产品图片 URL。"""
+    count = random.randint(2, 3)
+    return [f"https://img.linkmoney.online/products/{supplier_id}/{sku}-{i}.jpg"
+            for i in range(1, count + 1)]
+
+
+def _generate_weight_package(category, p):
+    """根据品类生成重量、包装尺寸、包装数量。"""
+    subcat = p.get("category", "")
+    if category == "fastener":
+        return round(random.uniform(0.001, 0.05), 4), "30x20x15 cm", random.choice([500, 1000, 2000])
+    elif category == "hardware":
+        if "bearing" in subcat:
+            return round(random.uniform(0.05, 0.3), 3), "30x25x15 cm", random.choice([100, 200, 500])
+        return round(random.uniform(0.05, 0.5), 3), "35x25x20 cm", random.choice([100, 200, 500])
+    elif category in ("electronics", "electronic"):
+        return round(random.uniform(0.01, 0.3), 3), "30x25x15 cm", random.choice([500, 1000, 2000])
+    elif category == "machinery":
+        return round(random.uniform(500, 5000), 1), "200x150x120 cm", 1
+    elif category == "textile":
+        return round(random.uniform(5, 30), 1), "60x40x30 cm", 1
+    elif category == "packaging":
+        return round(random.uniform(0.5, 5), 2), "45x35x25 cm", random.choice([500, 1000, 2000])
+    elif category == "auto_parts":
+        return round(random.uniform(0.1, 2), 2), "35x25x15 cm", random.choice([50, 100, 200])
+    elif category == "furniture":
+        return round(random.uniform(10, 80), 1), "120x60x50 cm", random.choice([1, 2])
+    elif category == "injection_molding":
+        if "mold" in subcat.lower():
+            return round(random.uniform(50, 500), 1), "80x60x50 cm", 1
+        return round(random.uniform(0.02, 0.5), 3), "35x25x20 cm", random.choice([200, 500, 1000])
+    else:
+        return 0.1, "30x20x15 cm", 100
+
+
+def _extend_product(product, main_category, supplier_id):
+    """为产品添加扩展字段，对齐 Alibaba attributes + schema.org Product 标准。"""
+    sku = product["sku"]
+
+    # subcategory（产品自身的 category 作为 subcategory）
+    product["subcategory"] = product.get("category", main_category)
+
+    # attributes（按主品类生成）
+    attr_fn = _ATTR_GENERATORS.get(main_category, _attrs_default)
+    product["attributes"] = attr_fn(product)
+
+    # description（中英文，含用途场景）
+    desc_fn = _DESC_GENERATORS.get(main_category, _desc_default)
+    product["description"], product["description_en"] = desc_fn(product)
+
+    # images（2-3 张）
+    product["images"] = _generate_images(supplier_id, sku)
+
+    # 库存扩展字段
+    product["inventory_unit"] = "pc"
+    product["inventory_lead_time_days"] = random.randint(3, 21)
+
+    # 重量与包装
+    product["weight_kg"], product["package_size"], product["package_qty"] = \
+        _generate_weight_package(main_category, product)
+
+    # 海关编码
+    product["hs_code"] = random.choice(HS_CODES.get(main_category, ["73181500"]))
+
+    # 贸易条款
+    product["origin"] = "China"
+    product["warranty"] = random.choice(WARRANTY_OPTIONS)
+    product["payment_terms"] = random.choice(PAYMENT_TERMS)
+
+    # 样品（70% 可提供样品，价格为最低阶梯价的 2-3 倍）
+    product["sample_available"] = 1 if random.random() < 0.7 else 0
+    lowest_price = product["pricing_tiers"][-1]["unit_price_usd"]
+    if product["sample_available"]:
+        product["sample_price_usd"] = round(lowest_price * random.uniform(2, 3), 3)
+    else:
+        product["sample_price_usd"] = None
+
+    # 定制（60% 支持定制）
+    product["customized"] = 1 if random.random() < 0.6 else 0
+
+    # 状态与时间戳
+    product["status"] = "active"
+    product["created_at"] = random_created_at()
+    product["updated_at"] = "2026-06-18T10:00:00Z"
+
+    return product
+
+
 def generate_products(supplier_id, category, count):
-    """为一家工厂生成 count 个产品。"""
+    """为一家工厂生成 count 个产品（含扩展字段）。"""
     generators = PRODUCT_GENERATORS.get(category, [_p_bolt])
     products = []
     # 打乱生成器顺序，取前 count 个（允许重复但优先不重复）
@@ -1215,7 +1715,9 @@ def generate_products(supplier_id, category, count):
     random.shuffle(shuffled)
     for i in range(1, count + 1):
         gen = shuffled[(i - 1) % len(shuffled)]
-        products.append(gen(supplier_id, i))
+        product = gen(supplier_id, i)
+        product = _extend_product(product, category, supplier_id)
+        products.append(product)
     return products
 
 
@@ -1337,8 +1839,8 @@ def generate_supplier(belt, category, seq_num, existing_ids):
 
 def main():
     print("=" * 70)
-    print("  LinkMoney 供应商扩充脚本")
-    print("  目标: 新增 150 家工厂，覆盖 8 大中国产业带")
+    print("  LinkMoney 产品数据扩充脚本")
+    print("  目标: 为现有工厂重新生成完整产品数据 (对齐 Alibaba/schema.org)")
     print("=" * 70)
 
     # 1. 读取现有数据
@@ -1350,39 +1852,26 @@ def main():
         data = json.load(f)
 
     old_count = len(data["suppliers"])
-    print(f"\n现有供应商: {old_count} 家")
+    print(f"\n现有供应商: {old_count} 家 (工厂数据将保留不变)")
 
-    # 收集现有 ID
-    existing_ids = {s["id"] for s in data["suppliers"]}
+    # 2. 为每家供应商重新生成产品数据（保留工厂数据不变）
+    total_products = 0
+    category_product_stats = {}
+    for supplier in data["suppliers"]:
+        sid = supplier["id"]
+        category = supplier["category"]
+        old_product_count = len(supplier.get("products", []))
+        if old_product_count == 0:
+            old_product_count = random.randint(2, 5)
+        new_products = generate_products(sid, category, old_product_count)
+        supplier["products"] = new_products
+        total_products += len(new_products)
+        category_product_stats[category] = category_product_stats.get(category, 0) + len(new_products)
 
-    # 2. 生成新供应商
-    new_suppliers = []
-    belt_stats = {}  # 产业带统计
-    category_stats = {}  # 品类统计
-    skill_installed_count = 0
+    print(f"产品已重新生成: {total_products} 个")
 
-    for belt in BELTS:
-        belt_name = belt["name"]
-        belt_count = 0
-        for category, count in belt["distribution"]:
-            for i in range(1, count + 1):
-                supplier = generate_supplier(belt, category, i, existing_ids)
-                new_suppliers.append(supplier)
-                belt_count += 1
-                category_stats[category] = category_stats.get(category, 0) + 1
-                if supplier["agent_skill_installed"]:
-                    skill_installed_count += 1
-        belt_stats[belt_name] = belt_count
-
-    print(f"新增供应商: {len(new_suppliers)} 家")
-
-    # 3. 合并
-    data["suppliers"].extend(new_suppliers)
-    total_count = len(data["suppliers"])
-    print(f"总计供应商: {total_count} 家")
-
-    # 更新版本信息
-    data["version"] = "3.0.0"
+    # 3. 更新版本信息
+    data["version"] = "3.1.0"
     data["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # 4. 备份原文件
@@ -1401,51 +1890,49 @@ def main():
     print(f"  统计信息")
     print(f"{'=' * 70}")
 
-    print(f"\n📊 各产业带工厂数:")
-    for belt_name, count in belt_stats.items():
-        print(f"   {belt_name:12s}: {count:3d} 家")
-    print(f"   {'合计':12s}: {sum(belt_stats.values()):3d} 家")
+    print(f"\n📊 供应商总数: {old_count} 家 (工厂数据未变更)")
+    print(f"📊 产品总数: {total_products} 个 (已重新生成)")
+    print(f"📊 平均每厂: {total_products / old_count:.1f} 个")
 
-    print(f"\n📊 各品类工厂数（新增）:")
-    for cat, count in sorted(category_stats.items(), key=lambda x: -x[1]):
-        print(f"   {cat:20s}: {count:3d} 家")
+    print(f"\n📊 各品类产品数:")
+    for cat, count in sorted(category_product_stats.items(), key=lambda x: -x[1]):
+        print(f"   {cat:20s}: {count:4d} 个")
 
-    # 全部品类统计（含原有）
-    all_category_stats = {}
-    for s in data["suppliers"]:
-        cat = s["category"]
-        all_category_stats[cat] = all_category_stats.get(cat, 0) + 1
-    print(f"\n📊 各品类工厂数（总计 {total_count} 家）:")
-    for cat, count in sorted(all_category_stats.items(), key=lambda x: -x[1]):
-        print(f"   {cat:20s}: {count:3d} 家")
+    # 7. 验证产品字段完整性
+    print(f"\n{'=' * 70}")
+    print(f"  产品字段验证")
+    print(f"{'=' * 70}")
+    required_fields = [
+        "id", "supplier_id", "sku", "name_zh", "name_en", "category",
+        "subcategory", "material", "grade", "specs", "attributes",
+        "description", "description_en", "images", "pricing_tiers",
+        "inventory_status", "inventory_quantity", "inventory_unit",
+        "inventory_lead_time_days", "weight_kg", "package_size",
+        "package_qty", "hs_code", "origin", "warranty", "payment_terms",
+        "sample_available", "sample_price_usd", "customized", "status",
+        "created_at", "updated_at",
+    ]
 
-    skill_rate = skill_installed_count / len(new_suppliers) * 100 if new_suppliers else 0
-    print(f"\n📊 Skill 安装情况（新增）:")
-    print(f"   已安装: {skill_installed_count} 家")
-    print(f"   未安装: {len(new_suppliers) - skill_installed_count} 家")
-    print(f"   安装率: {skill_rate:.1f}%")
+    all_complete = True
+    checked = 0
+    for s in data["suppliers"][:10]:  # 抽样检查前10家
+        for p in s["products"][:2]:   # 每家检查前2个产品
+            missing = [f for f in required_fields if f not in p]
+            if missing:
+                print(f"   ⚠️ {p.get('id', '?')}: 缺少 {missing}")
+                all_complete = False
+            checked += 1
 
-    # 产品统计
-    total_products = sum(len(s.get("products", [])) for s in new_suppliers)
-    print(f"\n📊 产品统计（新增）:")
-    print(f"   产品总数: {total_products} 个")
-    print(f"   平均每厂: {total_products / len(new_suppliers):.1f} 个")
+    if all_complete:
+        print(f"   ✅ 抽样检查通过 ({checked} 个产品)，所有 {len(required_fields)} 个字段已生成")
 
-    # 信任等级统计
-    trust_stats = {}
-    for s in new_suppliers:
-        level = s["trust_level"]
-        trust_stats[level] = trust_stats.get(level, 0) + 1
-    print(f"\n📊 信任等级分布（新增）:")
-    for level in ["gold", "silver", "verified", "basic"]:
-        count = trust_stats.get(level, 0)
-        print(f"   {level:10s}: {count:3d} 家")
-
-    gold_badge_count = sum(1 for s in new_suppliers if s["gold_badge"])
-    print(f"   金牌徽章: {gold_badge_count:3d} 家")
+    # 8. 打印示例产品
+    sample = data["suppliers"][-1]["products"][0]
+    print(f"\n📋 示例产品 ({sample['id']}):")
+    print(json.dumps(sample, ensure_ascii=False, indent=2))
 
     print(f"\n{'=' * 70}")
-    print(f"  扩充完成！供应商从 {old_count} 家增加到 {total_count} 家")
+    print(f"  产品数据扩充完成！版本升级至 {data['version']}")
     print(f"{'=' * 70}")
 
 

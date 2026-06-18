@@ -48,27 +48,32 @@ SPAM_PATTERNS = [
 
 # ===== 品类价格区间表（USD/pc，基于市场调研）=====
 # 格式: category: (min, max, unit)
+# 注意：这是"合理区间"而非"硬性上下限"。B2B 大单常有量价优惠，
+# 审核时 block 阈值放宽到 min*0.01 和 max*100，避免误伤。
 CATEGORY_PRICE_RANGES = {
-    "fastener":          (0.01, 5.00, "pc"),      # 紧固件
-    "hardware":          (0.05, 50.00, "pc"),     # 五金
-    "machinery":         (100, 50000, "set"),     # 机械
-    "electronics":       (0.10, 500.00, "pc"),    # 电子元件
-    "electronic":        (0.10, 500.00, "pc"),    # 兼容旧品类名
-    "textile":           (0.02, 20.00, "pc"),     # 纺织
-    "packaging":         (0.005, 5.00, "pc"),     # 包装
-    "injection_molding": (0.01, 100.00, "pc"),    # 注塑
-    "auto_parts":        (0.50, 2000.00, "pc"),   # 汽配
-    "furniture":         (1.00, 5000.00, "pc"),   # 家具
+    "fastener":          (0.005, 10.00, "pc"),    # 紧固件（量大可低至 $0.005）
+    "hardware":          (0.02, 200.00, "pc"),    # 五金
+    "machinery":         (50, 100000, "set"),      # 机械
+    "electronics":       (0.05, 2000.00, "pc"),    # 电子元件
+    "electronic":        (0.05, 2000.00, "pc"),    # 兼容旧品类名
+    "textile":           (0.01, 50.00, "pc"),      # 纺织
+    "packaging":         (0.001, 20.00, "pc"),     # 包装
+    "injection_molding": (0.005, 500.00, "pc"),    # 注塑
+    "auto_parts":        (0.20, 10000.00, "pc"),   # 汽配
+    "furniture":         (0.50, 20000.00, "pc"),   # 家具
 }
 
 # ===== 合理数量区间 =====
+# B2B 场景：样品单 1-99 件正常（review 但不 block），大单可达千万
 QUANTITY_RANGES = {
+    "sample_max": 99,      # 100 件以下算样品单，review 不 block
     "min": 1,
-    "max": 10_000_000,  # 1000 万
+    "max": 50_000_000,     # 5000 万（大型基建项目）
 }
 
 # ===== 合理交期区间（天）=====
-LEAD_TIME_RANGE = (1, 180)
+# 数字产品/样品可当天交付，大型设备定制可达 365 天
+LEAD_TIME_RANGE = (0, 365)
 
 
 class AuditResult:
@@ -121,19 +126,20 @@ def validate_email(email: str, check_mx: bool = True) -> AuditResult:
     if domain in DISPOSABLE_EMAIL_DOMAINS:
         return AuditResult("block", 10, [f"一次性邮箱域名: {domain}"])
 
-    # MX 记录查询（DNS）
+    # MX 记录查询（DNS）— 失败不降分，只记 info
+    # 中国很多小工厂用 QQ/163 邮箱，自有域名没配 MX 是正常的
     if check_mx:
         try:
             import dns.resolver
             answers = dns.resolver.resolve(domain, "MX", lifetime=3)
             if not answers:
-                return AuditResult("review", 50, [f"域名无 MX 记录: {domain}"])
+                return AuditResult("pass", 90, [f"域名无 MX 记录（可能用第三方邮箱）: {domain}"])
         except ImportError:
             # dnspython 未安装，跳过 MX 检查
             pass
-        except Exception as e:
-            # DNS 查询失败（超时/无记录），标记为 review
-            return AuditResult("review", 60, [f"MX 查询失败: {domain} ({type(e).__name__})"])
+        except Exception:
+            # DNS 查询失败（超时/网络问题），不降分
+            return AuditResult("pass", 95, [f"MX 查询跳过（网络/DNS）: {domain}"])
 
     return AuditResult("pass", 100, [])
 
@@ -144,12 +150,15 @@ _company_valid_patterns = [
     re.compile(r"有限公司$"),        # 中文
     re.compile(r"有限责任公司$"),
     re.compile(r"股份.*公司$"),
+    re.compile(r"(厂|合作社|工作室|经营部|门市部|加工厂|制造厂|制品厂)$"),  # 个体户/小微实体
     re.compile(r"(Ltd|LTD|Limited)\.?$", re.I),  # 英文
     re.compile(r"(Inc|Incorporated)\.?$", re.I),
     re.compile(r"(Co|Company)\.?,?Ltd\.?$", re.I),
     re.compile(r"GmbH$", re.I),       # 德语
     re.compile(r"(S\.A\.|S\.R\.L\.|S\.A\.S\.)$", re.I),  # 法/意/西
     re.compile(r"(Pty|Pvt)\.?\s*Ltd\.?$", re.I),  # 澳/印
+    re.compile(r"(Corp|Corporation)\.?$", re.I),
+    re.compile(r"(Group|Holding)\.?$", re.I),
 ]
 
 
@@ -239,18 +248,20 @@ def validate_price(unit_price_usd: float, category: str, quantity: int = 1) -> A
 
     min_price, max_price, unit = price_range
 
-    if unit_price_usd < min_price * 0.1:
+    # block 阈值极宽：只有明显异常（<1% 或 >10000% 市场价）才拦截
+    if unit_price_usd < min_price * 0.01:
         return AuditResult("block", 20, [
-            f"价格远低于品类 '{cat}' 市场价（最低 ${min_price}/{unit}，报价 ${unit_price_usd}）"
+            f"价格异常低（低于品类 '{cat}' 市场价 1%）：${unit_price_usd}/{unit}（市场最低 ${min_price}/{unit}）"
         ])
 
-    if unit_price_usd > max_price * 10:
+    if unit_price_usd > max_price * 100:
         return AuditResult("block", 20, [
-            f"价格远高于品类 '{cat}' 市场价（最高 ${max_price}/{unit}，报价 ${unit_price_usd}）"
+            f"价格异常高（高于品类 '{cat}' 市场价 100 倍）：${unit_price_usd}/{unit}（市场最高 ${max_price}/{unit}）"
         ])
 
-    if unit_price_usd < min_price * 0.5 or unit_price_usd > max_price * 3:
-        return AuditResult("review", 60, [
+    # review 阈值：偏离 5 倍以内只标记不拦截（B2B 量大优惠/定制加价都正常）
+    if unit_price_usd < min_price * 0.2 or unit_price_usd > max_price * 5:
+        return AuditResult("review", 70, [
             f"价格偏离品类 '{cat}' 市场区间（${min_price}-${max_price}/{unit}，报价 ${unit_price_usd}）"
         ])
 
@@ -264,8 +275,10 @@ def validate_quantity(quantity: int) -> AuditResult:
     if quantity <= 0:
         return AuditResult("block", 0, [f"数量非正数: {quantity}"])
 
-    if quantity < QUANTITY_RANGES["min"]:
-        return AuditResult("review", 60, [f"数量过小: {quantity}"])
+    # B2B 样品单 1-99 件完全正常，不标记不拦截
+    sample_max = QUANTITY_RANGES.get("sample_max", 99)
+    if quantity <= sample_max:
+        return AuditResult("pass", 95, [f"样品单（{quantity} 件）"])
 
     if quantity > QUANTITY_RANGES["max"]:
         return AuditResult("block", 10, [f"数量异常大: {quantity}（超过 {QUANTITY_RANGES['max']:,}）"])
@@ -277,15 +290,16 @@ def validate_quantity(quantity: int) -> AuditResult:
 
 def validate_lead_time(lead_time_days: int) -> AuditResult:
     """验证交期是否合理"""
-    if lead_time_days <= 0:
-        return AuditResult("block", 0, [f"交期非正数: {lead_time_days} 天"])
+    if lead_time_days < 0:
+        return AuditResult("block", 0, [f"交期为负数: {lead_time_days} 天"])
 
     min_d, max_d = LEAD_TIME_RANGE
-    if lead_time_days < min_d:
-        return AuditResult("block", 10, [f"交期过短: {lead_time_days} 天（最少 {min_d} 天）"])
+    # 0 天 = 现货/数字产品，允许
+    if lead_time_days == 0:
+        return AuditResult("pass", 95, ["现货/即时交付"])
 
     if lead_time_days > max_d:
-        return AuditResult("review", 50, [f"交期过长: {lead_time_days} 天（超过 {max_d} 天）"])
+        return AuditResult("review", 60, [f"交期较长: {lead_time_days} 天（超过 {max_d} 天）"])
 
     return AuditResult("pass", 100, [])
 

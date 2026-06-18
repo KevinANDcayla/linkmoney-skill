@@ -316,6 +316,51 @@ def _migrate_v21():
             except sqlite3.OperationalError:
                 pass  # 列已存在
 
+        # products 表迁移（v3.1+ — 对齐 Alibaba/schema.org 完整字段）
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                supplier_id TEXT NOT NULL,
+                sku TEXT NOT NULL,
+                name_zh TEXT DEFAULT '',
+                name_en TEXT DEFAULT '',
+                category TEXT DEFAULT '',
+                material TEXT DEFAULT '',
+                grade TEXT DEFAULT '',
+                specs TEXT NOT NULL DEFAULT '{}',
+                pricing_tiers TEXT NOT NULL DEFAULT '[]',
+                inventory_status TEXT DEFAULT 'unknown',
+                inventory_quantity INTEGER DEFAULT 0,
+                inventory_unit TEXT DEFAULT 'pc',
+                inventory_lead_time_days INTEGER DEFAULT 0,
+                inventory_updated_at TEXT DEFAULT ''
+            )
+        """)
+        for col_name, col_type in [
+            ("subcategory", "TEXT DEFAULT ''"),
+            ("attributes", "TEXT NOT NULL DEFAULT '[]'"),
+            ("description", "TEXT DEFAULT ''"),
+            ("description_en", "TEXT DEFAULT ''"),
+            ("images", "TEXT NOT NULL DEFAULT '[]'"),
+            ("weight_kg", "REAL DEFAULT 0"),
+            ("package_size", "TEXT DEFAULT ''"),
+            ("package_qty", "INTEGER DEFAULT 1"),
+            ("hs_code", "TEXT DEFAULT ''"),
+            ("origin", "TEXT DEFAULT 'China'"),
+            ("warranty", "TEXT DEFAULT ''"),
+            ("payment_terms", "TEXT DEFAULT ''"),
+            ("sample_available", "INTEGER DEFAULT 0"),
+            ("sample_price_usd", "REAL DEFAULT 0"),
+            ("customized", "INTEGER DEFAULT 0"),
+            ("status", "TEXT DEFAULT 'active'"),
+            ("created_at", "TEXT DEFAULT ''"),
+            ("updated_at", "TEXT DEFAULT ''"),
+        ]:
+            try:
+                c.execute(f"ALTER TABLE products ADD COLUMN {col_name} {col_type}")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
         conn.commit()
 
 
@@ -381,15 +426,33 @@ def init_db():
                 name_zh TEXT DEFAULT '',
                 name_en TEXT DEFAULT '',
                 category TEXT DEFAULT '',
+                subcategory TEXT DEFAULT '',           -- v3.1: 子品类（bolt/nut/washer 等）
                 material TEXT DEFAULT '',
                 grade TEXT DEFAULT '',
-                specs TEXT NOT NULL DEFAULT '{}',
+                specs TEXT NOT NULL DEFAULT '{}',      -- 规格参数 JSON（diameter/length/finish 等）
+                attributes TEXT NOT NULL DEFAULT '[]', -- v3.1: 属性列表 [{name,value,unit}] 对齐 Alibaba attributes
+                description TEXT DEFAULT '',           -- v3.1: 产品详细描述
+                description_en TEXT DEFAULT '',        -- v3.1: 英文描述
+                images TEXT NOT NULL DEFAULT '[]',     -- v3.1: 图片 URL 列表
                 pricing_tiers TEXT NOT NULL DEFAULT '[]',
                 inventory_status TEXT DEFAULT 'unknown',
                 inventory_quantity INTEGER DEFAULT 0,
                 inventory_unit TEXT DEFAULT 'pc',
                 inventory_lead_time_days INTEGER DEFAULT 0,
                 inventory_updated_at TEXT DEFAULT '',
+                weight_kg REAL DEFAULT 0,              -- v3.1: 单件重量（物流计算用）
+                package_size TEXT DEFAULT '',          -- v3.1: 包装尺寸 "LxWxH cm"
+                package_qty INTEGER DEFAULT 1,         -- v3.1: 每包数量
+                hs_code TEXT DEFAULT '',               -- v3.1: 海关编码（出口报关用）
+                origin TEXT DEFAULT 'China',           -- v3.1: 原产地
+                warranty TEXT DEFAULT '',              -- v3.1: 质保
+                payment_terms TEXT DEFAULT '',         -- v3.1: 付款条件 "T/T, L/C, PayPal"
+                sample_available INTEGER DEFAULT 0,    -- v3.1: 是否提供样品
+                sample_price_usd REAL DEFAULT 0,       -- v3.1: 样品价格
+                customized INTEGER DEFAULT 0,          -- v3.1: 是否支持定制
+                status TEXT DEFAULT 'active',          -- v3.1: active/draft/discontinued
+                created_at TEXT DEFAULT '',
+                updated_at TEXT DEFAULT '',
                 FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
             )
         """)
@@ -534,30 +597,52 @@ def init_db():
                 json.dumps(s.get("language_contact", {}), ensure_ascii=False),
             ))
 
-            # 导入 products
+            # 导入 products（v3.1: 支持完整字段，对齐 Alibaba/schema.org）
             for p in s.get("products", []):
                 inv = p.get("inventory", {})
                 c.execute("""
                     INSERT OR REPLACE INTO products(
-                        supplier_id, sku, name_zh, name_en, category, material, grade,
-                        specs, pricing_tiers, inventory_status, inventory_quantity,
-                        inventory_unit, inventory_lead_time_days, inventory_updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        supplier_id, sku, name_zh, name_en, category, subcategory,
+                        material, grade, specs, attributes, description, description_en, images,
+                        pricing_tiers, inventory_status, inventory_quantity, inventory_unit,
+                        inventory_lead_time_days, inventory_updated_at,
+                        weight_kg, package_size, package_qty, hs_code, origin,
+                        warranty, payment_terms, sample_available, sample_price_usd,
+                        customized, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     s["id"],
                     p.get("sku", ""),
                     p.get("name_zh", ""),
                     p.get("name_en", ""),
                     p.get("category", ""),
+                    p.get("subcategory", ""),
                     p.get("material", ""),
                     p.get("grade", ""),
                     json.dumps(p.get("specs", {}), ensure_ascii=False),
+                    json.dumps(p.get("attributes", []), ensure_ascii=False),
+                    p.get("description", ""),
+                    p.get("description_en", ""),
+                    json.dumps(p.get("images", []), ensure_ascii=False),
                     json.dumps(p.get("pricing_tiers", []), ensure_ascii=False),
-                    inv.get("status", "unknown"),
-                    inv.get("quantity", 0),
-                    inv.get("unit", "pc"),
-                    inv.get("lead_time_days", 0),
-                    inv.get("updated_at", ""),
+                    p.get("inventory_status", inv.get("status", "unknown")),
+                    p.get("inventory_quantity", inv.get("quantity", 0)),
+                    p.get("inventory_unit", inv.get("unit", "pc")),
+                    p.get("inventory_lead_time_days", inv.get("lead_time_days", 0)),
+                    p.get("inventory_updated_at", inv.get("updated_at", "")),
+                    p.get("weight_kg", 0),
+                    p.get("package_size", ""),
+                    p.get("package_qty", 1),
+                    p.get("hs_code", ""),
+                    p.get("origin", "China"),
+                    p.get("warranty", ""),
+                    p.get("payment_terms", ""),
+                    p.get("sample_available", 0),
+                    p.get("sample_price_usd", 0),
+                    p.get("customized", 0),
+                    p.get("status", "active"),
+                    p.get("created_at", ""),
+                    p.get("updated_at", ""),
                 ))
 
         # 导入 overseas_buyers
