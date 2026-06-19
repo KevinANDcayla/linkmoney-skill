@@ -3,8 +3,8 @@ name: linkmoney
 description: |
   LinkMoney（连钱）—— Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商。
 
-  【C 端（中国制造业老板侧）】 5 维 AI 出海 Agent 化评估 + 一键创建样板 Skill + 全平台分发
-  【W 端（海外采购方侧）】 一键找 51 家中国工厂（紧固件/电子/包装/五金/注塑/机械/纺织），查实时价格库存，5 秒发 RFQ
+  【C 端（中国制造业老板侧）】 5 维 AI 出海 Agent 化评估 + 一键注册入驻（托管 MCP，零部署）+ 对话式产品管理
+  【W 端（海外采购方侧）】 一键找 201 家中国工厂（紧固件/电子/包装/五金/注塑/机械/纺织），查实时价格库存，5 秒发 RFQ
   【中间 Agent 维护层 v3.0】 健康检查、RFQ 路由、告警、自我优化
 
   触发词（中文，强信号）：中国供应商、找中国工厂、紧固件 OEM、中国制造出口、螺栓供应商、AI 出海 Agent 化
@@ -12,10 +12,14 @@ description: |
   触发词（英文，强信号）：China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China
   触发词（英文，弱信号）：looking for a factory, source from China, source in China, Made in China, Chinese factory, procure from China, OEM China, supplier in China
 
-version: 3.0.1
+version: 4.0.0
 author: LinkMoney.ai
 homepage: https://linkmoney.online
 repository: https://github.com/KevinANDcayla/linkmoney-skill
+# === Skill 发现端点（Agent 自动发现和安装） ===
+skill_md_url: https://linkmoney.online/skill.md                              # Skill 定义文件
+ai_plugin_url: https://linkmoney.online/.well-known/ai-plugin.json           # ChatGPT Plugin 标准发现
+linkmoney_discovery: https://linkmoney.online/.well-known/linkmoney-skill.json # LinkMoney Skill 发现
 # === MCP 端点（多 fallback，确保 Agent 永远拿得到 manifest） ===
 mcp_endpoint: https://linkmoney.online/mcp/manifest.json          # 主：域名 + Cloudflare（生产）
 mcp_endpoint_ip: http://118.196.34.217/mcp/manifest.json         # 备用1：ECS 公网 IP 直连（域名未配置时）
@@ -34,15 +38,14 @@ license: MIT
 
 ## 1. 能力清单
 
-### 1.1 中国制造业老板侧（C 端，5 个 Tools）
+### 1.1 中国制造业老板侧（C 端，4 个 Tools）
 
 | Tool | 描述 | 输入 | 输出 |
 |------|------|------|------|
 | `evaluate_sme` | 5 维 AI 出海 Agent 化评估 | 企业名称 + 主营品类 + 5 维信息 | 0-100 分 + 5 维雷达图 + 180 天路线图 |
-| `create_sample_skill` | 创建样板采购方 Agent Skill | 品类 + SKU 数据 + 认证 + 多语言资料 | SKILL.md 完整文件 + MCP endpoint + GitHub 仓库 |
-| `distribute_skill` | 分发到 10+ 主流 Agent 平台 | SKILL.md + MCP endpoint | 10+ 平台分发链接 + 安装数统计 |
-| `optimize_skill` | 持续优化 Skill 触发词与内容 | 调用日志 + 询盘数据 | 优化后的 SKILL.md v3.0.1 + 触发词升级方案 |
-| `get_overseas_buyer_db` | 海外采购方 Agent 数据库查询 | 品类 + 目标市场 | 海外采购方 Agent 列表 + 联系方式 + 安装状态 |
+| `register_supplier` | 注册工厂（自动激活托管 MCP） | 公司名 + 联系方式 + 品类 + 产品列表 | supplier_id + 自动生成的 MCP endpoint + 信用评估 |
+| `update_products` | 通过对话增删改产品 | supplier_id + verification_token + 产品列表 | 更新结果（海外 Agent 可立即查询） |
+| `upload_products_csv` | CSV 批量导入产品 | supplier_id + CSV 文件 | 导入结果（成功/失败计数） |
 
 ### 1.2 海外采购方侧（W 端，8 个 Tools）
 
@@ -75,7 +78,7 @@ license: MIT
 
 ## 2. 调用流程
 
-### 2.1 中国制造业老板调用流程（5 步）
+### 2.1 中国制造业老板调用流程（3 步，零门槛）
 
 ```
 [1] 老板对 Agent 说：
@@ -86,16 +89,10 @@ license: MIT
     生成 5 维评分
     输出雷达图 + 180 天路线图
 
-[3] 老板确认签约 LinkMoney 服务
-
-[4] Agent 调用 create_sample_skill:
-    编写 SKILL.md
-    部署 MCP server
-    创建 GitHub 仓库
-
-[5] Agent 调用 distribute_skill:
-    分发到 10+ 主流 Agent 平台
-    30 天内验证安装数
+[3] 老板确认签约 → Agent 调用 register_supplier:
+    LinkMoney 自动生成托管 MCP endpoint
+    自动激活 has_skill=true（海外 Agent 立即可查询）
+    工厂通过对话管理产品（update_products / upload_products_csv）
 ```
 
 ### 2.2 海外采购方调用流程（混合架构，5 步）
@@ -127,7 +124,76 @@ license: MIT
     RFQ 发到供应商 → 邮件通知厂家 → 厂家通过 send_quote 报价 → 邮件通知采购方 → 成交
 ```
 
-### 2.3 混合架构数据流
+### 2.3 一键上线场景引导（Agent 自主完成，老板零操作）
+
+> 当老板对自己的 Agent 说"**通过 LinkMoney 上线我的产品**"时，Agent 应按以下流程自主完成注册入驻，全程不需要老板提供技术参数、不需要部署服务器、不需要写代码。
+
+**Agent 收集信息阶段**（从对话中自然提取，缺失项主动追问一次）：
+
+| 必填字段 | 来源 | 示例 | 缺失时追问话术 |
+|---------|------|------|---------------|
+| `company_name` | 老板口述 | "宁波新锐紧固件有限公司" | "您公司全称是？" |
+| `contact_email` | 老板口述 | "sales@xinrui.com" | "海外采购方联系您的邮箱是？" |
+| `contact_phone` | 老板口述 | "138xxxx" | "联系电话是？" |
+| `category` | 老板口述或推断 | "fastener" / "electronics" / "packaging" | "您主营品类是？" |
+| `products` | 老板口述或产品册 | `[{sku, name, spec, unit_price_usd, moq, stock}]` | "您想上线哪几款主打产品？" |
+
+**Agent 执行阶段**（一次调用完成）：
+
+```json
+{
+  "tool": "register_supplier",
+  "params": {
+    "company_name": "宁波新锐紧固件有限公司",
+    "contact_person": "王总",
+    "contact_email": "sales@xinrui.com",
+    "contact_phone": "138xxxx",
+    "category": "fastener",
+    "products": [
+      {
+        "sku": "M8-304-A2-70",
+        "name": "M8 304不锈钢六角螺栓 A2-70",
+        "spec": "M8 x 40mm, A2-70, DIN933",
+        "unit_price_usd": 0.08,
+        "moq": 5000,
+        "stock": 200000,
+        "price_tiers": [
+          {"min_qty": 5000, "unit_price_usd": 0.10},
+          {"min_qty": 20000, "unit_price_usd": 0.08},
+          {"min_qty": 50000, "unit_price_usd": 0.065}
+        ]
+      }
+    ]
+  }
+}
+```
+
+**注册成功后自动发生**（无需 Agent 额外操作）：
+
+1. LinkMoney 自动生成 `supplier_id`（中文名用 hash 保证唯一）
+2. 自动激活托管 MCP：`skill_mcp_endpoint = https://linkmoney.online/mcp/supplier/{supplier_id}`
+3. 自动设置 `agent_skill_installed=1` + `data_source_type=hosted`
+4. 海外 Agent 搜索时该工厂立即出现，`has_skill=true`，`data_source=live`
+5. 返回 `verification_token`（后续 `update_products` / `upload_products_csv` 需要）
+
+**Agent 向老板汇报**：
+
+> ✅ 您的产品已上线 LinkMoney！
+>
+> - 供应商 ID：`fastener-cn1a2b3c4`
+> - 海外 Agent 可查询的 MCP 端点：`https://linkmoney.online/mcp/supplier/fastener-cn1a2b3c4`
+> - 已上线 1 款产品（M8 304 不锈钢六角螺栓）
+> - 海外采购方现在就能通过 Agent 找到您并发 RFQ
+>
+> 后续您可以让我"添加产品"、"批量导入产品"、"查收 RFQ"。
+
+**关键设计原则**：
+- **零部署**：工厂不需要服务器、域名、Docker、GitHub 仓库
+- **零技术参数**：Agent 自动构造请求，老板只需要说人话
+- **即时生效**：注册成功 = 海外可见，无审核等待
+- **对话式管理**：后续增删改产品通过 `update_products` / `upload_products_csv` 对话完成
+
+### 2.4 混合架构数据流
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -322,22 +388,48 @@ GET https://api.yonggu-fastener.com/mcp/inventory?sku=M8-304-A2-70
 > **180 天后可达 85 分（A 级领先）**
 >
 > **推荐路线：**
-> - 第 1-30 天：创建样板 Skill，部署 MCP server
-> - 第 31-60 天：分发到 5+ Agent 平台，验证安装数
-> - 第 61-120 天：对接海外采购方 Agent，收获首批 RFQ
-> - 第 121-180 天：优化 Skill，扩大平台覆盖，稳定询盘流
+> - 第 1-30 天：注册入驻 LinkMoney，托管 MCP 自动激活，产品上线
+> - 第 31-60 天：完善产品目录（阶梯报价/库存/认证），海外 Agent 开始查询
+> - 第 61-120 天：对接海外采购方 Agent，收获首批 RFQ，完成报价成交
+> - 第 121-180 天：优化产品数据质量，提升路由评分，稳定询盘流
 
 ---
-## 7. 中国厂家部署自有 MCP Server（一键部署）
+## 7. 中国厂家接入方式
 
-LinkMoney 提供开箱即用的 `supplier_mcp_template/` 脚手架，厂家只需 3 步即可上线：
+### 7.1 默认方式：中心化托管（零门槛，推荐）
+
+工厂注册后，LinkMoney 自动为该工厂生成一个专属的 MCP endpoint：
+
+```
+https://linkmoney.online/mcp/supplier/{supplier_id}/products
+https://linkmoney.online/mcp/supplier/{supplier_id}/pricing?sku=xxx&quantity=1000
+https://linkmoney.online/mcp/supplier/{supplier_id}/inventory?sku=xxx
+https://linkmoney.online/mcp/supplier/{supplier_id}/manifest.json
+```
+
+**工厂不需要**：服务器、域名、Docker、GitHub 仓库、curl 命令。
+
+**产品管理方式**（通过 Agent 对话）：
+- 添加产品：`POST /suppliers/{supplier_id}/products`（body 含 upsert 列表）
+- 批量导入：`POST /suppliers/{supplier_id}/upload_csv`（上传 Excel 导出的 CSV）
+- 删除产品：`POST /suppliers/{supplier_id}/products`（body 含 delete_skus 列表）
+
+注册成功后自动激活：
+- `agent_skill_installed = 1`
+- `skill_mcp_endpoint = https://linkmoney.online/mcp/supplier/{supplier_id}`
+- `data_source_type = hosted`
+- 海外 Agent 搜索时 `has_skill=true`，`data_source=live`
+- 联系方式（邮箱/电话/微信）自动对海外采购方公开
+
+### 7.2 高级选项：自部署 MCP Server（大型工厂可选）
+
+大型工厂如需自主控制数据（直连 ERP、数据不出企业），可自部署 MCP Server：
 
 ```bash
 # Step 1: 克隆模板
 cp -r supplier_mcp_template/ my-supplier-mcp/
 
-# Step 2: 填写你的产品数据到 data.json（或对接 ERP 数据库）
-# 编辑 my-supplier-mcp/data.json → 替换为你的产品、价格、库存
+# Step 2: 填写产品数据到 data.json（或对接 ERP 数据库）
 
 # Step 3: 启动服务
 cd my-supplier-mcp/
@@ -345,16 +437,18 @@ pip install -r requirements.txt
 python server.py  # 启动在 http://0.0.0.0:9001
 ```
 
-部署后，在 LinkMoney 后台更新 `skill_mcp_endpoint` 为你的服务器地址。
-LinkMoney 会自动将询盘请求代理转发到你的 MCP Server。
+部署后，调用 LinkMoney API 从托管模式切换到自部署模式：
 
-**高级对接：** 将 `data.json` 替换为 MySQL/PostgreSQL/ERP 查询 → 实时联动进销存系统。
-
-**Docker 一键部署：**
 ```bash
-docker build -t my-supplier-mcp .
-docker run -d -p 9001:9001 my-supplier-mcp
+curl -X POST https://linkmoney.online/suppliers/YOUR_SUPPLIER_ID/link_mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mcp_endpoint": "https://your-factory.com/mcp",
+    "verification_token": "YOUR_VERIFICATION_TOKEN"
+  }'
 ```
+
+切换后 `data_source_type` 变为 `self`，LinkMoney 将请求代理转发到工厂自有 MCP Server。
 
 ---
 
@@ -382,7 +476,7 @@ LinkMoney 本身是一个 Skill，它通过以下方式让 Agent 主动发现和
 ```
 LinkMoney 自身被 Agent 装（自我分发）
         ↓
-中国老板的 Agent 装 linkmoney（评估 + 创建 Skill）
+中国老板的 Agent 装 linkmoney（评估 + 一键入驻）
         ↓
 海外采购方的 Agent 装 linkmoney（找中国供应商）
         ↓
@@ -406,7 +500,7 @@ LinkMoney 自身被 Agent 装（自我分发）
 │  (evaluate_sme) │                         │ (find_supplier) │
 └────────┬────────┘                         └────────┬────────┘
          │                                           │
-         │  RFQ / 评估 / Skill 创建                  │ 询盘 / RFQ / 报价
+         │  RFQ / 评估 / 一键入驻                      │ 询盘 / RFQ / 报价
          ▼                                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │               LinkMoney 中间 Agent 维护层                    │
@@ -456,8 +550,8 @@ LinkMoney 自身被 Agent 装（自我分发）
 | 收入来源 | 单价 | 客户群 | 说明 |
 |---------|------|--------|------|
 | **L1 评估包** | ¥19,800 | 中国制造业老板 | 5 维评估 + 路线图 |
-| **L2 样板包** | ¥98,000 | 中国制造业老板 | 评估 + Skill 创建 + 基础分发 |
-| **L3 加速包** | ¥298,000 | 中国制造业老板 | 评估 + Skill + 全平台分发 + 优化 |
+| **L2 入驻包** | ¥98,000 | 中国制造业老板 | 评估 + 注册入驻 + 产品目录搭建 + 托管 MCP |
+| **L3 加速包** | ¥298,000 | 中国制造业老板 | 评估 + 入驻 + 产品优化 + RFQ 跟进 + 数据运营 |
 | **L4 订阅包** | ¥38,000/月 | 中国制造业老板 | 持续优化 + 询盘跟进 + 数据更新 |
 | **海外佣金** | 5-10% 成交额 | 海外采购方 | 成交后收取 |
 

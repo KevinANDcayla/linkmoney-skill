@@ -17,7 +17,7 @@ from typing import Optional
 from pathlib import Path
 from urllib.parse import urljoin
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from pydantic import BaseModel
@@ -151,6 +151,7 @@ def _migrate_v21():
             ("verification_token", "TEXT DEFAULT ''"),
             ("outreach_used_this_month", "INTEGER DEFAULT 0"),
             ("outreach_reset_at", "TEXT DEFAULT ''"),
+            ("data_source_type", "TEXT DEFAULT 'hosted'"),  # v3.3: hosted(托管)/self(自部署)/tunnel(隧道)
         ]:
             try:
                 c.execute(f"ALTER TABLE suppliers ADD COLUMN {col_name} {col_type}")
@@ -355,17 +356,89 @@ def _migrate_v21():
             ("status", "TEXT DEFAULT 'active'"),
             ("created_at", "TEXT DEFAULT ''"),
             ("updated_at", "TEXT DEFAULT ''"),
+            # v3.2: P0+P1 字段（对齐 Alibaba/1688/schema.org）
+            ("moq", "INTEGER DEFAULT 1"),
+            ("trade_terms", "TEXT DEFAULT 'FOB'"),
+            ("port", "TEXT DEFAULT ''"),
+            ("price_currency", "TEXT DEFAULT 'USD'"),
+            ("price_type", "TEXT DEFAULT 'FOB'"),
+            ("price_unit", "TEXT DEFAULT 'pc'"),
+            ("price_validity", "TEXT DEFAULT ''"),
+            ("certifications", "TEXT NOT NULL DEFAULT '[]'"),
+            ("packaging_details", "TEXT DEFAULT ''"),
+            ("supply_ability_monthly", "INTEGER DEFAULT 0"),
         ]:
             try:
                 c.execute(f"ALTER TABLE products ADD COLUMN {col_name} {col_type}")
             except sqlite3.OperationalError:
                 pass  # 列已存在
 
+        # v3.2: 唯一索引（防止重复注册 + 产品重复）
+        # suppliers: email 唯一（允许空值共存）、name_zh 唯一、phone 唯一
+        for idx_name, idx_sql in [
+            ("idx_suppliers_email_unique", "CREATE UNIQUE INDEX IF NOT EXISTS idx_suppliers_email_unique ON suppliers(email) WHERE email != ''"),
+            ("idx_suppliers_name_zh_unique", "CREATE UNIQUE INDEX IF NOT EXISTS idx_suppliers_name_zh_unique ON suppliers(name_zh) WHERE name_zh != ''"),
+            ("idx_suppliers_phone_unique", "CREATE UNIQUE INDEX IF NOT EXISTS idx_suppliers_phone_unique ON suppliers(phone) WHERE phone != ''"),
+            # products: (supplier_id, sku) 唯一
+            ("idx_products_supplier_sku_unique", "CREATE UNIQUE INDEX IF NOT EXISTS idx_products_supplier_sku_unique ON products(supplier_id, sku)"),
+        ]:
+            try:
+                c.execute(idx_sql)
+            except sqlite3.IntegrityError as e:
+                # 已有重复数据时创建唯一索引会失败，记录但不阻塞
+                logger.warning(f"创建唯一索引 {idx_name} 失败（可能已有重复数据）: {e}")
+            except sqlite3.OperationalError:
+                pass  # 索引已存在
+
         conn.commit()
 
 
-def init_db():
-    """首次运行时从 database.json 导入数据到 SQLite，若库已存在则迁移"""
+def _get_json_version() -> tuple:
+    """读取 database.json 的版本号和最后更新时间。返回 (version, last_updated)"""
+    if not JSON_FILE.exists():
+        return ("", "")
+    try:
+        with open(JSON_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return (data.get("version", ""), data.get("last_updated", ""))
+    except Exception as e:
+        logger.warning(f"读取 JSON 版本失败: {e}")
+        return ("", "")
+
+
+def _get_db_json_version() -> tuple:
+    """读取 SQLite 中记录的 JSON 版本号。返回 (version, last_updated)"""
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT value FROM config WHERE key = 'json_version'").fetchone()
+            version = row["value"] if row else ""
+            row = conn.execute("SELECT value FROM config WHERE key = 'json_last_updated'").fetchone()
+            last_updated = row["value"] if row else ""
+        return (version, last_updated)
+    except Exception:
+        return ("", "")
+
+
+def _set_db_json_version(version: str, last_updated: str):
+    """记录当前 DB 导入的 JSON 版本号"""
+    try:
+        with get_db() as conn:
+            conn.execute("INSERT OR REPLACE INTO config(key, value) VALUES (?, ?)", ("json_version", version))
+            conn.execute("INSERT OR REPLACE INTO config(key, value) VALUES (?, ?)", ("json_last_updated", last_updated))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"写入 JSON 版本号失败: {e}")
+
+
+def init_db(force: bool = False):
+    """首次运行时从 database.json 导入数据到 SQLite，若库已存在则迁移。
+
+    v3.2: 新增版本号比对机制。当 database.json 的 version/last_updated 与 DB 记录的不一致时，
+    自动重新导入（使用 INSERT OR REPLACE，幂等，不丢失运行时表如 rfqs/quotes）。
+
+    Args:
+        force: True 时强制重新导入 JSON（无论版本号是否变化）
+    """
     # 一次性设置 WAL 模式（数据库级，不需要每个 connection 都设）
     with get_db() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
@@ -374,14 +447,30 @@ def init_db():
     # 即使 DB 已存在，也要确保新表（v2.1+）的迁移
     _migrate_v21()
 
-    if os.path.exists(DB_PATH):
-        logger.info("SQLite 数据库已存在，执行迁移检查")
-        return
+    # v3.2: 版本号比对 — 判断是否需要重新导入
+    json_ver, json_updated = _get_json_version()
+    db_ver, db_updated = _get_db_json_version()
 
-    logger.info("SQLite 数据库不存在，开始从 JSON 导入...")
+    if force:
+        logger.info(f"强制重新导入 JSON (force=True)")
+    elif not os.path.exists(DB_PATH):
+        logger.info("SQLite 数据库不存在，开始从 JSON 导入...")
+    elif json_ver and json_ver != db_ver:
+        logger.info(f"JSON 版本变化: DB={db_ver} -> JSON={json_ver}，触发重新导入")
+    elif json_updated and json_updated != db_updated:
+        logger.info(f"JSON last_updated 变化: DB={db_updated} -> JSON={json_updated}，触发重新导入")
+    else:
+        # 版本一致，无需重新导入
+        if json_ver:
+            logger.info(f"SQLite 数据库已是最新 (json_version={db_ver})，跳过导入")
+        else:
+            logger.info("SQLite 数据库已存在，执行迁移检查")
+        return
 
     with get_db() as conn:
         c = conn.cursor()
+        # v3.2: 导入数据时临时关闭外键检查（INSERT OR REPLACE suppliers 时会触发 products 外键约束）
+        c.execute("PRAGMA foreign_keys=OFF")
 
         # --- 创建表 ---
         c.execute("""
@@ -414,7 +503,20 @@ def init_db():
                 email TEXT DEFAULT '',
                 phone TEXT DEFAULT '',
                 wechat TEXT DEFAULT '',
-                language_contact TEXT DEFAULT '[]'
+                language_contact TEXT NOT NULL DEFAULT '[]',
+                -- v2.1+ 列（fresh DB 时直接建好，避免 _migrate_v21 时序问题）
+                email_verified INTEGER DEFAULT 0,
+                phone_verified INTEGER DEFAULT 0,
+                license_verified INTEGER DEFAULT 0,
+                trust_score REAL DEFAULT 0,
+                trust_level TEXT DEFAULT 'unverified',
+                review_count INTEGER DEFAULT 0,
+                review_avg REAL DEFAULT 0,
+                gold_badge INTEGER DEFAULT 0,
+                verification_token TEXT DEFAULT '',
+                outreach_used_this_month INTEGER DEFAULT 0,
+                outreach_reset_at TEXT DEFAULT '',
+                data_source_type TEXT DEFAULT 'hosted'
             )
         """)
 
@@ -434,7 +536,17 @@ def init_db():
                 description TEXT DEFAULT '',           -- v3.1: 产品详细描述
                 description_en TEXT DEFAULT '',        -- v3.1: 英文描述
                 images TEXT NOT NULL DEFAULT '[]',     -- v3.1: 图片 URL 列表
-                pricing_tiers TEXT NOT NULL DEFAULT '[]',
+                pricing_tiers TEXT NOT NULL DEFAULT '[]',  -- [{min_qty,max_qty,unit_price_usd}]
+                moq INTEGER DEFAULT 1,                 -- v3.2: 最小起订量（B2B 核心，对齐 Alibaba/1688）
+                trade_terms TEXT DEFAULT 'FOB',        -- v3.2: 贸易术语 FOB/CIF/EXW/FCA/DDP
+                port TEXT DEFAULT '',                  -- v3.2: 起运港（Ningbo/Shanghai/Shenzhen）
+                price_currency TEXT DEFAULT 'USD',     -- v3.2: 计价币种
+                price_type TEXT DEFAULT 'FOB',         -- v3.2: 价格基础 FOB/CIF/EXW（与 trade_terms 对齐）
+                price_unit TEXT DEFAULT 'pc',          -- v3.2: 计价单位 pc/kg/m/set
+                price_validity TEXT DEFAULT '',        -- v3.2: 报价有效期 ISO 日期
+                certifications TEXT NOT NULL DEFAULT '[]', -- v3.2: 产品级认证 ["CE","RoHS","ISO9001"]
+                packaging_details TEXT DEFAULT '',     -- v3.2: 包装详情文本 "100 pcs/bag, 50 bags/carton"
+                supply_ability_monthly INTEGER DEFAULT 0, -- v3.2: 月产能
                 inventory_status TEXT DEFAULT 'unknown',
                 inventory_quantity INTEGER DEFAULT 0,
                 inventory_unit TEXT DEFAULT 'pc',
@@ -472,7 +584,12 @@ def init_db():
                 languages TEXT NOT NULL DEFAULT '[]',
                 agent_platform TEXT DEFAULT 'unknown',
                 agent_installed_linkmoney INTEGER DEFAULT 0,
-                last_active TEXT DEFAULT ''
+                last_active TEXT DEFAULT '',
+                -- v2.1+ 列（fresh DB 时直接建好）
+                email_verified INTEGER DEFAULT 0,
+                email_domain TEXT DEFAULT '',
+                company_domain TEXT DEFAULT '',
+                trust_score REAL DEFAULT 0
             )
         """)
 
@@ -597,19 +714,22 @@ def init_db():
                 json.dumps(s.get("language_contact", {}), ensure_ascii=False),
             ))
 
-            # 导入 products（v3.1: 支持完整字段，对齐 Alibaba/schema.org）
+            # 导入 products（v3.2: 支持完整字段，对齐 Alibaba/1688/schema.org）
             for p in s.get("products", []):
                 inv = p.get("inventory", {})
                 c.execute("""
                     INSERT OR REPLACE INTO products(
                         supplier_id, sku, name_zh, name_en, category, subcategory,
                         material, grade, specs, attributes, description, description_en, images,
-                        pricing_tiers, inventory_status, inventory_quantity, inventory_unit,
+                        pricing_tiers, moq, trade_terms, port,
+                        price_currency, price_type, price_unit, price_validity,
+                        certifications, packaging_details, supply_ability_monthly,
+                        inventory_status, inventory_quantity, inventory_unit,
                         inventory_lead_time_days, inventory_updated_at,
                         weight_kg, package_size, package_qty, hs_code, origin,
                         warranty, payment_terms, sample_available, sample_price_usd,
                         customized, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     s["id"],
                     p.get("sku", ""),
@@ -625,6 +745,16 @@ def init_db():
                     p.get("description_en", ""),
                     json.dumps(p.get("images", []), ensure_ascii=False),
                     json.dumps(p.get("pricing_tiers", []), ensure_ascii=False),
+                    p.get("moq", 1),
+                    p.get("trade_terms", "FOB"),
+                    p.get("port", s.get("location", {}).get("port", "")),
+                    p.get("price_currency", "USD"),
+                    p.get("price_type", "FOB"),
+                    p.get("price_unit", "pc"),
+                    p.get("price_validity", ""),
+                    json.dumps(p.get("certifications", []), ensure_ascii=False),
+                    p.get("packaging_details", ""),
+                    p.get("supply_ability_monthly", 0),
                     p.get("inventory_status", inv.get("status", "unknown")),
                     p.get("inventory_quantity", inv.get("quantity", 0)),
                     p.get("inventory_unit", inv.get("unit", "pc")),
@@ -705,9 +835,17 @@ def init_db():
         c.execute("INSERT OR REPLACE INTO config(key, value) VALUES(?, ?)",
                   ("distributions", json.dumps(distributions, ensure_ascii=False)))
 
-        conn.commit()
+        # v3.2: 记录导入的 JSON 版本号（用于后续版本比对）
+        c.execute("INSERT OR REPLACE INTO config(key, value) VALUES(?, ?)",
+                  ("json_version", json_ver))
+        c.execute("INSERT OR REPLACE INTO config(key, value) VALUES(?, ?)",
+                  ("json_last_updated", json_updated))
 
-    logger.info("SQLite 数据库初始化完成")
+        conn.commit()
+        # 重新开启外键检查
+        c.execute("PRAGMA foreign_keys=ON")
+
+    logger.info(f"SQLite 数据库初始化完成 (json_version={json_ver}, json_last_updated={json_updated})")
 
 
 def _default_evaluation_template():
@@ -777,7 +915,7 @@ def _row_to_product(row):
         "updated_at": p.pop("inventory_updated_at", ""),
     }
     # 解析 JSON 字段
-    for json_field in ["specs", "pricing_tiers"]:
+    for json_field in ["specs", "pricing_tiers", "attributes", "images", "certifications"]:
         if json_field in p and isinstance(p[json_field], str):
             try:
                 p[json_field] = json.loads(p[json_field])
@@ -1005,6 +1143,7 @@ _AUTH_EXEMPT_PATHS = {
     "/onboard-supplier", "/onboard-buyer", "/beta-signup", "/beta-program",
     "/verify_email", "/trust_score/supplier",  # 公开端点：验证 + 信用查询
     "/skill.md", "/.well-known/ai-plugin.json", "/.well-known/linkmoney-skill.json",  # Skill 发现端点
+    "/register_buyer",  # v3.3: 海外采购方自注册（公开，降低 W 端闭环门槛）
     # v3.0 中间 Agent：作为平台维护者，对内默认开启（可在生产环境收紧）
     "/agent/status", "/agent/health", "/agent/routing",
     "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain",
@@ -1029,6 +1168,7 @@ async def auth_and_logging_middleware(request: Request, call_next):
         or path.startswith("/openapi")
         or path == "/health"
         or path.startswith("/marketplace/")   # v4.0 Agent Marketplace 公开端点
+        or path.startswith("/mcp/supplier/")  # v3.3 工厂托管 MCP 端点（公开，海外 Agent 直接调用）
     )
     if not is_exempt:
         api_key = request.headers.get("X-API-Key", "")
@@ -1340,11 +1480,28 @@ def evaluate_sme(req: EvaluateRequest):
     with get_db() as conn:
         template = _get_config(conn, "evaluation_template", _default_evaluation_template())
 
+    # v3.3.2: 兼容旧版 list 格式的 dimensions
+    # 如果 DB 中存的是旧版 7 维 list（price_competitiveness 等），回退到默认 5 维模板
+    default_template = _default_evaluation_template()
+    dims_template = template.get("dimensions", {})
+    if isinstance(dims_template, list):
+        # 旧版 list 格式 → 检查维度名是否与默认模板匹配
+        list_keys = {d.get("key") for d in dims_template if "key" in d}
+        default_keys = set(default_template["dimensions"].keys())
+        if list_keys != default_keys:
+            # 维度名不匹配（旧版 7 维），使用默认 5 维模板
+            template = default_template
+            dims_template = template["dimensions"]
+        else:
+            # 维度名匹配，转换为 dict 格式
+            dims_template = {d["key"]: d for d in dims_template if "key" in d}
+            template["dimensions"] = dims_template
+
     dims = req.dimensions
     scores = {}
 
     # 校验 5 维完整性
-    expected_dims = set(template["dimensions"].keys())
+    expected_dims = set(dims_template.keys())
     provided_dims = set(dims.keys())
     missing_dims = expected_dims - provided_dims
     if missing_dims:
@@ -1382,23 +1539,23 @@ def evaluate_sme(req: EvaluateRequest):
     # 180 天路线图
     if level == "A":
         roadmap = [
-            {"phase": "第 1-30 天", "action": "部署 MCP server + 分发到 Top 5 平台"},
-            {"phase": "第 31-90 天", "action": "优化 Skill 触发词 + 对接首批海外 Agent"},
-            {"phase": "第 91-180 天", "action": "全平台覆盖 + 稳定询盘流 + 数据驱动优化"},
+            {"phase": "第 1-30 天", "action": "注册入驻 LinkMoney + 托管 MCP 自动激活 + 产品上线"},
+            {"phase": "第 31-90 天", "action": "完善产品目录（阶梯报价/库存/认证）+ 对接首批海外 Agent"},
+            {"phase": "第 91-180 天", "action": "优化数据质量 + 稳定询盘流 + 数据驱动提升路由评分"},
         ]
     elif level == "B":
         roadmap = [
-            {"phase": "第 1-30 天", "action": "创建样板 Skill，部署 MCP server"},
-            {"phase": "第 31-60 天", "action": "分发到 5+ Agent 平台，验证安装数"},
-            {"phase": "第 61-120 天", "action": "对接海外采购方 Agent，收获首批 RFQ"},
-            {"phase": "第 121-180 天", "action": "优化 Skill，扩大平台覆盖，稳定询盘流"},
+            {"phase": "第 1-30 天", "action": "注册入驻 LinkMoney，托管 MCP 自动激活，产品上线"},
+            {"phase": "第 31-60 天", "action": "完善产品目录（阶梯报价/库存/认证），海外 Agent 开始查询"},
+            {"phase": "第 61-120 天", "action": "对接海外采购方 Agent，收获首批 RFQ，完成报价成交"},
+            {"phase": "第 121-180 天", "action": "优化产品数据质量，提升路由评分，稳定询盘流"},
         ]
     elif level == "C":
         roadmap = [
             {"phase": "第 1-30 天", "action": "补齐数字化基础（ERP/CRM/多语言网站）"},
             {"phase": "第 31-60 天", "action": "整理产品规格书 + 认证文件数字化"},
-            {"phase": "第 61-120 天", "action": "创建样板 Skill + 基础分发"},
-            {"phase": "第 121-180 天", "action": "验证安装 + 优化 + 对接海外 Agent"},
+            {"phase": "第 61-120 天", "action": "注册入驻 LinkMoney + 产品上线 + 基础对接"},
+            {"phase": "第 121-180 天", "action": "验证询盘 + 优化 + 对接海外 Agent"},
         ]
     else:
         roadmap = [
@@ -1549,10 +1706,10 @@ def find_china_supplier(
                     min_qty = tier.get("min_qty", 0)
                     max_qty = tier.get("max_qty")
                     if quantity >= min_qty and (max_qty is None or quantity <= max_qty):
-                        best_price = tier.get("price_usd", 0)
+                        best_price = tier.get("unit_price_usd", 0)
                         break
                 if best_price is None and pricing_tiers:
-                    best_price = pricing_tiers[-1].get("price_usd", 0)
+                    best_price = pricing_tiers[-1].get("unit_price_usd", 0)
 
                 if best_price and best_price > 0:
                     price_diff = abs(best_price - target_price_value) / target_price_value
@@ -1763,8 +1920,8 @@ def get_pricing(
         "requested_quantity": quantity,
         "pricing_tiers": tiers,
         "matched_tier": best_tier,
-        "unit_price_usd": best_tier["price_usd"] if best_tier else None,
-        "total_price_usd": round(best_tier["price_usd"] * quantity, 2) if best_tier else None,
+        "unit_price_usd": best_tier.get("unit_price_usd") if best_tier else None,
+        "total_price_usd": round(best_tier.get("unit_price_usd", 0) * quantity, 2) if best_tier else None,
         "moq": supplier.get("moq", 0),
         "fob_port": supplier["location"]["port"],
         "_meta": {
@@ -3179,10 +3336,19 @@ def _gen_token(length: int = 32) -> str:
 
 
 def _slugify_supplier_id(name: str, category: str) -> str:
-    """根据公司名+品类生成供应商 ID（避免中文）"""
+    """根据公司名+品类生成供应商 ID（避免中文，保证唯一性）
+
+    v3.3.3: 中文名经过滤后 slug 为空时，使用公司名 hash 保证唯一性
+    """
+    cat = re.sub(r"[^a-z0-9]+", "", category.lower())[:8] or "supplier"
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:20]
-    cat = re.sub(r"[^a-z0-9]+", "", category.lower())[:8]
-    return f"{cat}-{slug}" if slug else f"{cat}-supplier"
+
+    if not slug:
+        # 中文名或纯特殊字符 → 用公司名 hash 生成唯一 slug
+        name_hash = hashlib.md5(name.encode("utf-8")).hexdigest()[:8]
+        slug = f"cn{name_hash}"
+
+    return f"{cat}-{slug}"
 
 
 def _compute_trust_level(score: float, email_v: int, phone_v: int, license_v: int) -> str:
@@ -3283,14 +3449,6 @@ def register_supplier(req: RegisterSupplierRequest):
     4. 自动生成专属 SKILL.md（收录到 LinkMoney 总 Skill 下）
     5. 触发邮箱验证
     """
-    with get_db() as conn:
-        # 检查邮箱是否已注册
-        existing = conn.execute(
-            "SELECT id FROM suppliers WHERE email = ?", (req.email,)
-        ).fetchone()
-        if existing:
-            raise HTTPException(status_code=409, detail=f"该邮箱已注册为供应商 {existing['id']}")
-
     # ===== Trust & Safety 审核工厂注册信息 =====
     try:
         from trust_safety import audit_supplier_registration
@@ -3348,74 +3506,141 @@ def register_supplier(req: RegisterSupplierRequest):
     })
 
     verification_token = _gen_token(16)
+    now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    # v3.3: 中心化托管 — 注册即自动生成 MCP endpoint，工厂无需自己部署
+    hosted_mcp_endpoint = f"https://linkmoney.online/mcp/supplier/{supplier_id}"
+
+    # v3.2: 查重 + 插入在同一事务内（消除 TOCTOU 竞态）
+    # 查重维度：邮箱、公司名、手机号、supplier_id
     with get_db() as conn:
-        # 写入 suppliers
-        conn.execute("""
-            INSERT INTO suppliers(
-                id, name_zh, name_en, city, province, port, category, subcategories,
-                year_established, employees, annual_revenue_usd, export_ratio, main_markets,
-                moq, lead_time_standard, lead_time_express, certifications, languages,
-                agent_skill_installed, skill_mcp_endpoint, skill_platforms, skill_installs,
-                created_at, updated_at, contact_person, email, phone, wechat, language_contact,
-                email_verified, phone_verified, license_verified, trust_score, trust_level,
-                verification_token
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            supplier_id,
-            req.company_name, name_en, city, province, port,
-            req.category, json.dumps([], ensure_ascii=False),
-            req.year_established, req.employees, req.annual_revenue_usd, req.export_ratio,
-            json.dumps(req.main_markets, ensure_ascii=False),
-            req.moq, req.lead_time_days_standard, req.lead_time_days_express,
-            json.dumps(req.certifications, ensure_ascii=False),
-            json.dumps(req.languages, ensure_ascii=False),
-            0, "", json.dumps([], ensure_ascii=False), 0,
-            datetime.now().isoformat() + "Z", datetime.now().isoformat() + "Z",
-            req.contact_person, req.email, req.phone, req.wechat,
-            json.dumps({}, ensure_ascii=False),
-            0, 0, 0,
-            eval_result["overall_score"], eval_result["trust_level"],
-            verification_token,
-        ))
+        # 1. 邮箱查重
+        existing = conn.execute("SELECT id FROM suppliers WHERE email = ?", (req.email,)).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail=f"该邮箱已注册为供应商 {existing['id']}")
 
-        # 写入 products
-        for i, p in enumerate(req.products):
+        # 2. 公司名查重（中文名精确匹配）
+        existing = conn.execute("SELECT id, category FROM suppliers WHERE name_zh = ?", (req.company_name,)).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail=f"该公司名已注册为供应商 {existing['id']}（品类: {existing['category']}）。如需修改信息，请联系管理员。")
+
+        # 3. 手机号查重（如果提供了手机号）
+        if req.phone:
+            existing = conn.execute("SELECT id FROM suppliers WHERE phone = ?", (req.phone,)).fetchone()
+            if existing:
+                raise HTTPException(status_code=409, detail=f"该手机号已注册为供应商 {existing['id']}")
+
+        # 4. supplier_id 查重（v3.3.3: 冲突时自动加序号后缀，而非直接报错）
+        base_id = supplier_id
+        suffix = 2
+        while conn.execute("SELECT id FROM suppliers WHERE id = ?", (supplier_id,)).fetchone():
+            supplier_id = f"{base_id}-{suffix}"
+            suffix += 1
+
+        # 5. 写入 suppliers（在同一事务内，消除竞态）
+        # v3.2: 捕获 UNIQUE 约束冲突，返回友好的 409 而非 500
+        # v3.3: 自动激活托管 MCP — 工厂无需自己部署
+        try:
+            # 写入 suppliers
             conn.execute("""
-                INSERT INTO products(supplier_id, sku, name_zh, name_en, category, material, grade, specs, pricing_tiers, inventory_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO suppliers(
+                    id, name_zh, name_en, city, province, port, category, subcategories,
+                    year_established, employees, annual_revenue_usd, export_ratio, main_markets,
+                    moq, lead_time_standard, lead_time_express, certifications, languages,
+                    agent_skill_installed, skill_mcp_endpoint, skill_platforms, skill_installs,
+                    created_at, updated_at, contact_person, email, phone, wechat, language_contact,
+                    email_verified, phone_verified, license_verified, trust_score, trust_level,
+                    verification_token, data_source_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 supplier_id,
-                p.get("sku", f"sku-{i+1:03d}"),
-                p.get("name_zh", ""), p.get("name_en", ""),
-                req.category,
-                p.get("material", ""), p.get("grade", ""),
-                json.dumps(p.get("specs", {}), ensure_ascii=False),
-                json.dumps(p.get("pricing_tiers", []), ensure_ascii=False),
-                p.get("inventory_status", "unknown"),
+                req.company_name, name_en, city, province, port,
+                req.category, json.dumps([], ensure_ascii=False),
+                req.year_established, req.employees, req.annual_revenue_usd, req.export_ratio,
+                json.dumps(req.main_markets, ensure_ascii=False),
+                req.moq, req.lead_time_days_standard, req.lead_time_days_express,
+                json.dumps(req.certifications, ensure_ascii=False),
+                json.dumps(req.languages, ensure_ascii=False),
+                1, hosted_mcp_endpoint, json.dumps([], ensure_ascii=False), 0,
+                datetime.now().isoformat() + "Z", datetime.now().isoformat() + "Z",
+                req.contact_person, req.email, req.phone, req.wechat,
+                json.dumps({}, ensure_ascii=False),
+                0, 0, 0,
+                eval_result["overall_score"], eval_result["trust_level"],
+                verification_token,
+                "hosted",
             ))
 
-        # 记录评估
-        conn.execute("""
-            INSERT INTO trust_evaluations(target_id, target_type, overall_score, dimensions, trust_level)
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            supplier_id, "supplier",
-            eval_result["overall_score"],
-            json.dumps(eval_result["dimensions"], ensure_ascii=False),
-            eval_result["trust_level"],
-        ))
+            # 写入 products（使用 INSERT OR REPLACE，防止 sku 重复时更新而非报错）
+            for i, p in enumerate(req.products):
+                conn.execute("""
+                    INSERT OR REPLACE INTO products(supplier_id, sku, name_zh, name_en, category, material, grade, specs, pricing_tiers,
+                        moq, trade_terms, port, price_currency, price_type, price_unit,
+                        inventory_status, inventory_quantity, inventory_unit, inventory_lead_time_days,
+                        hs_code, payment_terms, sample_available, customized, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    supplier_id,
+                    p.get("sku", f"sku-{i+1:03d}"),
+                    p.get("name_zh", ""), p.get("name_en", ""),
+                    req.category,
+                    p.get("material", ""), p.get("grade", ""),
+                    json.dumps(p.get("specs", {}), ensure_ascii=False),
+                    json.dumps(p.get("pricing_tiers", []), ensure_ascii=False),
+                    p.get("moq", req.moq or 1),
+                    p.get("trade_terms", "FOB"),
+                    p.get("port", port),
+                    p.get("price_currency", "USD"),
+                    p.get("price_type", "FOB"),
+                    p.get("price_unit", "pc"),
+                    p.get("inventory_status", "unknown"),
+                    p.get("inventory_quantity", 0),
+                    p.get("inventory_unit", "pc"),
+                    p.get("inventory_lead_time_days", 0),
+                    p.get("hs_code", ""),
+                    p.get("payment_terms", ""),
+                    1 if p.get("sample_available") else 0,
+                    1 if p.get("customized") else 0,
+                    p.get("status", "active"),
+                    now_iso, now_iso,
+                ))
 
-        # 创建验证 token
-        conn.execute("""
-            INSERT INTO verifications(token, target_type, target_id, contact, purpose, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            verification_token, "supplier_email", supplier_id, req.email, "verify_email",
-            (datetime.now() + timedelta(days=7)).isoformat() + "Z",
-        ))
+            # 记录评估
+            conn.execute("""
+                INSERT INTO trust_evaluations(target_id, target_type, overall_score, dimensions, trust_level)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                supplier_id, "supplier",
+                eval_result["overall_score"],
+                json.dumps(eval_result["dimensions"], ensure_ascii=False),
+                eval_result["trust_level"],
+            ))
 
-        conn.commit()
+            # 创建验证 token
+            conn.execute("""
+                INSERT INTO verifications(token, target_type, target_id, contact, purpose, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                verification_token, "supplier_email", supplier_id, req.email, "verify_email",
+                (datetime.now() + timedelta(days=7)).isoformat() + "Z",
+            ))
+
+            conn.commit()
+
+        except sqlite3.IntegrityError as e:
+            conn.rollback()
+            err_msg = str(e).lower()
+            if "email" in err_msg:
+                raise HTTPException(status_code=409, detail=f"该邮箱已被注册（数据库唯一约束）: {req.email}")
+            elif "name_zh" in err_msg or "suppliers.name_zh" in err_msg:
+                raise HTTPException(status_code=409, detail=f"该公司名已被注册（数据库唯一约束）: {req.company_name}")
+            elif "phone" in err_msg:
+                raise HTTPException(status_code=409, detail=f"该手机号已被注册（数据库唯一约束）: {req.phone}")
+            elif "idx_products_supplier_sku_unique" in err_msg or "supplier_id, sku" in err_msg:
+                raise HTTPException(status_code=409, detail=f"产品 SKU 重复（同一供应商下 SKU 必须唯一）")
+            else:
+                logger.error(f"注册时数据库唯一约束冲突: {e}", exc_info=True)
+                raise HTTPException(status_code=409, detail=f"注册失败（数据冲突）: {e}")
 
     # 自动生成专属 SKILL.md（v2.1 由 LinkMoney 完成，工厂不需要自己写）
     company_slug = re.sub(r"[^a-z0-9]+", "-", req.company_name.lower()).strip("-")[:20]
@@ -3459,6 +3684,10 @@ trust_score: {eval_result['overall_score']}
         "supplier_id": supplier_id,
         "company_name": req.company_name,
         "status": "registered",
+        "mcp_endpoint": hosted_mcp_endpoint,
+        "data_source_type": "hosted",
+        "has_skill": True,
+        "agent_skill_installed": True,
         "verification": {
             "email_verified": False,
             "phone_verified": False,
@@ -3472,7 +3701,89 @@ trust_score: {eval_result['overall_score']}
             "skill_md_preview": skill_md[:500] + "...",
             "full_skill_in_git": f"https://linkmoney.online/skill.md?supplier={supplier_id}",
         },
-        "estimated_time_to_live": "验证邮箱后 5 分钟内被海外 Agent 搜索到",
+        "next_action": {
+            "step_1": "验证邮箱：访问 verify_url 或调用 /verify_email?token=xxx",
+            "step_2": f"你的工厂已自动激活，MCP endpoint: {hosted_mcp_endpoint}",
+            "step_3": "通过对话管理产品：调用 POST /suppliers/{supplier_id}/products 增删改产品",
+            "step_4": "海外 Agent 现在可以通过 find_china_supplier 搜索到你",
+        },
+        "estimated_time_to_live": "验证邮箱后立即被海外 Agent 搜索到（托管模式，实时数据）",
+    }
+
+
+# ===== v3.3: 海外采购方自注册（打通 W 端闭环）=====
+
+class RegisterBuyerRequest(BaseModel):
+    """海外采购方自注册（海外 Agent 可代为调用）"""
+    company: str
+    country: str
+    industry: str = ""
+    contact_person: str = ""
+    email: str
+    interested_categories: list = []  # ["fastener", "electronics", ...]
+    preferred_supplier_locations: list = []  # ["Ningbo", "Shenzhen", ...]
+    certifications_required: list = []  # ["ISO 9001", "CE", ...]
+    languages: list = ["en"]
+    agent_platform: str = "unknown"  # "chatgpt" / "claude" / "coze" / ...
+    annual_import_usd: float = 0
+
+
+@app.post("/register_buyer")
+def register_buyer(req: RegisterBuyerRequest, request: Request):
+    """海外采购方自注册 — 让海外 Agent 能自发发 RFQ
+
+    使用场景：
+    - 海外 Agent 装了 LinkMoney Skill 后，首次发 RFQ 前自动注册
+    - 无需管理员预存，降低 W 端闭环门槛
+    """
+    # 邮箱查重
+    with get_db() as conn:
+        if req.email:
+            existing = conn.execute("SELECT id FROM overseas_buyers WHERE email = ?", (req.email,)).fetchone()
+            if existing:
+                # 已存在，直接返回（幂等）
+                return {
+                    "buyer_id": existing["id"],
+                    "status": "already_registered",
+                    "message": f"该邮箱已注册，buyer_id={existing['id']}",
+                }
+
+        # 生成 buyer_id
+        buyer_id = _slugify_supplier_id(req.company, "buyer") or f"buyer-{int(time.time())}"
+        # 确保 buyer_id 唯一
+        base_id = buyer_id
+        suffix = 2
+        while conn.execute("SELECT id FROM overseas_buyers WHERE id = ?", (buyer_id,)).fetchone():
+            buyer_id = f"{base_id}-{suffix}"
+            suffix += 1
+
+        now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute("""
+            INSERT INTO overseas_buyers(
+                id, company, country, industry, annual_import_usd,
+                interested_categories, preferred_supplier_locations, certifications_required,
+                contact_person, email, languages, agent_platform,
+                agent_installed_linkmoney, last_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+        """, (
+            buyer_id, req.company, req.country, req.industry, req.annual_import_usd,
+            json.dumps(req.interested_categories, ensure_ascii=False),
+            json.dumps(req.preferred_supplier_locations, ensure_ascii=False),
+            json.dumps(req.certifications_required, ensure_ascii=False),
+            req.contact_person, req.email,
+            json.dumps(req.languages, ensure_ascii=False),
+            req.agent_platform,
+            now_iso,
+        ))
+        conn.commit()
+
+    return {
+        "buyer_id": buyer_id,
+        "status": "registered",
+        "company": req.company,
+        "country": req.country,
+        "next_action": f"现在可以调用 submit_rfq 发送询价了（buyer_id={buyer_id}）",
+        "example": f'find_china_supplier → get_pricing → submit_rfq(supplier_id=xxx, buyer_id={buyer_id}, sku=xxx, quantity=1000)',
     }
 
 
@@ -3510,6 +3821,604 @@ def verify_email(token: str):
         "target_type": v["target_type"],
         "target_id": v["target_id"],
         "message": "邮箱已验证！现在可以接收询盘通知。",
+    }
+
+
+# ===== v3.2: 供应商 MCP 端点回写（打通混合架构实时数据流）=====
+
+class LinkMcpRequest(BaseModel):
+    """工厂部署完自有 MCP Server 后，回写 endpoint 到中央库"""
+    mcp_endpoint: str                           # 如 https://factory.com/mcp
+    verification_token: str = ""                # 注册时返回的 token（或邮箱验证后的 session）
+    skill_platforms: list = []                  # 已发布到哪些平台 ["github","claude","coze"]
+    skill_installs: int = 0                     # 安装数
+
+
+@app.post("/suppliers/{supplier_id}/link_mcp")
+def link_supplier_mcp(supplier_id: str, req: LinkMcpRequest):
+    """工厂部署完自有 MCP Server 后，回写 endpoint 并激活实时数据流。
+
+    这是打通"混合架构 v2.0"的关键端点：
+    - 工厂部署 supplier_mcp_template 后调用此端点
+    - 中央库写入 skill_mcp_endpoint 并置 agent_skill_installed=1
+    - 之后 find_china_supplier 返回 has_skill=true，联系方式自动公开
+    - get_pricing / get_inventory 走实时 MCP 而非缓存
+    """
+    mcp_endpoint = (req.mcp_endpoint or "").strip().rstrip("/")
+    if not mcp_endpoint or not mcp_endpoint.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="mcp_endpoint 必须是 http(s):// 开头的 URL")
+
+    with get_db() as conn:
+        # 1. 验证 supplier 存在
+        s = conn.execute("SELECT id, name_zh, email, verification_token, email_verified, agent_skill_installed FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not s:
+            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
+
+        # 2. 鉴权：verification_token 或邮箱已验证
+        token_ok = req.verification_token and req.verification_token == s["verification_token"]
+        email_verified = bool(s["email_verified"])
+        if not token_ok and not email_verified:
+            raise HTTPException(status_code=403, detail="需要有效的 verification_token 或已验证的邮箱")
+
+        # 3. 可选：探测 MCP endpoint 可达性（best-effort，失败不阻塞）
+        mcp_reachable = False
+        probe_error = ""
+        try:
+            import urllib.request
+            r = urllib.request.urlopen(mcp_endpoint, timeout=5)
+            mcp_reachable = r.status == 200
+        except Exception as e:
+            probe_error = str(e)[:100]
+
+        # 4. 写入 endpoint + 激活 skill
+        now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute("""
+            UPDATE suppliers SET
+                skill_mcp_endpoint = ?,
+                agent_skill_installed = 1,
+                skill_platforms = ?,
+                skill_installs = ?,
+                updated_at = ?
+            WHERE id = ?
+        """, (
+            mcp_endpoint,
+            json.dumps(req.skill_platforms, ensure_ascii=False),
+            req.skill_installs,
+            now_iso,
+            supplier_id,
+        ))
+        conn.commit()
+
+        # 5. 失效缓存，让 find_china_supplier 立即返回 has_skill=true
+        _supplier_cache.invalidate("find:")
+
+    logger.info(f"[link_mcp] supplier={supplier_id} endpoint={mcp_endpoint} reachable={mcp_reachable}")
+
+    return {
+        "status": "linked",
+        "supplier_id": supplier_id,
+        "mcp_endpoint": mcp_endpoint,
+        "agent_skill_installed": True,
+        "mcp_reachable": mcp_reachable,
+        "probe_error": probe_error,
+        "message": "MCP 端点已登记。海外 Agent 现在可以通过 LinkMoney 获取你的实时库存和价格。" if mcp_reachable else "MCP 端点已登记，但探测失败（不影响登记，稍后中间层会自动重试）。",
+        "next_step": "你的工厂现在 data_source=live，联系方式已对海外采购方公开。",
+    }
+
+
+@app.post("/suppliers/{supplier_id}/unlink_mcp")
+def unlink_supplier_mcp(supplier_id: str, req: LinkMcpRequest):
+    """取消 MCP 端点登记（回退到缓存模式）"""
+    with get_db() as conn:
+        s = conn.execute("SELECT id, verification_token, email_verified FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not s:
+            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
+        token_ok = req.verification_token and req.verification_token == s["verification_token"]
+        if not token_ok and not bool(s["email_verified"]):
+            raise HTTPException(status_code=403, detail="需要有效的 verification_token")
+
+        conn.execute("""
+            UPDATE suppliers SET
+                skill_mcp_endpoint = '',
+                agent_skill_installed = 0,
+                updated_at = ?
+            WHERE id = ?
+        """, (datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"), supplier_id))
+        conn.commit()
+        _supplier_cache.invalidate("find:")
+
+    return {"status": "unlinked", "supplier_id": supplier_id, "message": "MCP 端点已取消，回退到缓存模式"}
+
+
+# ===== v3.3: 中心化托管 — 多租户 MCP 路由 =====
+# 每个工厂自动获得一个虚拟 MCP endpoint: /mcp/supplier/{supplier_id}/*
+# 数据直接读 SQLite，工厂无需自己部署任何服务器
+
+@app.get("/mcp/supplier/{supplier_id}/manifest.json")
+def supplier_mcp_manifest(supplier_id: str):
+    """工厂专属 MCP 清单（兼容 ChatGPT ai-plugin.json / MCP 发现格式）"""
+    with get_db() as conn:
+        s = conn.execute("SELECT id, name_zh, name_en, category, agent_skill_installed, skill_mcp_endpoint FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not s:
+            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
+        if not s["agent_skill_installed"]:
+            raise HTTPException(status_code=403, detail="该供应商尚未激活 MCP")
+        p_count = conn.execute("SELECT COUNT(*) as c FROM products WHERE supplier_id = ?", (supplier_id,)).fetchone()["c"]
+
+    base = f"https://linkmoney.online/mcp/supplier/{supplier_id}"
+    return {
+        "schema_version": "v1",
+        "name": s["name_zh"],
+        "name_en": s["name_en"],
+        "supplier_id": supplier_id,
+        "category": s["category"],
+        "description": f"{s['name_zh']} — 中国{s['category']}品类供应商，提供实时产品/价格/库存查询",
+        "product_count": p_count,
+        "tools": [
+            {"name": "get_products", "description": "获取该工厂的产品目录", "endpoint": f"{base}/products"},
+            {"name": "get_pricing", "description": "查阶梯报价", "endpoint": f"{base}/pricing"},
+            {"name": "get_inventory", "description": "查实时库存", "endpoint": f"{base}/inventory"},
+            {"name": "submit_quote", "description": "提交询价单", "endpoint": f"{base}/quote"},
+        ],
+        "_meta": {"source": "linkmoney_hosted", "data_source_type": "hosted"},
+    }
+
+
+@app.get("/mcp/supplier/{supplier_id}/.well-known/linkmoney-skill.json")
+def supplier_mcp_well_known(supplier_id: str):
+    """自动发现端点（兼容 ChatGPT ai-plugin.json）"""
+    return supplier_mcp_manifest(supplier_id)
+
+
+@app.get("/mcp/supplier/{supplier_id}/products")
+def supplier_mcp_products(supplier_id: str, limit: int = 50, offset: int = 0):
+    """该工厂的产品目录"""
+    with get_db() as conn:
+        s = conn.execute("SELECT id, name_zh, agent_skill_installed FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not s:
+            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
+        rows = conn.execute(
+            "SELECT * FROM products WHERE supplier_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (supplier_id, limit, offset),
+        ).fetchall()
+
+    products = [_row_to_product(r) for r in rows]
+    return {
+        "supplier_id": supplier_id,
+        "supplier_name": s["name_zh"],
+        "count": len(products),
+        "products": products,
+        "_meta": {"source": "linkmoney_hosted", "is_live": True},
+    }
+
+
+@app.get("/mcp/supplier/{supplier_id}/pricing")
+def supplier_mcp_pricing(supplier_id: str, sku: str, quantity: int = 1000):
+    """阶梯报价 — 直接读 SQLite pricing_tiers"""
+    with get_db() as conn:
+        s = conn.execute("SELECT id, name_zh, moq FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not s:
+            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
+        p = conn.execute("SELECT * FROM products WHERE supplier_id = ? AND sku = ?", (supplier_id, sku)).fetchone()
+
+    if not p:
+        raise HTTPException(status_code=404, detail=f"SKU {sku} 不存在")
+
+    product = _row_to_product(p)
+    tiers = product.get("pricing_tiers", [])
+    best_tier = None
+    for tier in tiers:
+        min_q = tier.get("min_qty", 0)
+        max_q = tier.get("max_qty", float("inf")) or float("inf")
+        if min_q <= quantity <= max_q:
+            best_tier = tier
+            break
+    if not best_tier:
+        best_tier = tiers[0] if tiers else None
+
+    unit_price = best_tier.get("unit_price_usd") if best_tier else None
+    return {
+        "supplier_id": supplier_id,
+        "supplier_name": s["name_zh"],
+        "sku": sku,
+        "product_name": product["name_zh"],
+        "requested_quantity": quantity,
+        "pricing_tiers": tiers,
+        "matched_tier": best_tier,
+        "unit_price_usd": unit_price,
+        "total_price_usd": round(unit_price * quantity, 2) if unit_price else None,
+        "moq": product.get("moq", s["moq"]),
+        "trade_terms": product.get("trade_terms", "FOB"),
+        "port": product.get("port", ""),
+        "_meta": {"source": "linkmoney_hosted", "is_live": True},
+    }
+
+
+@app.get("/mcp/supplier/{supplier_id}/inventory")
+def supplier_mcp_inventory(supplier_id: str, sku: str):
+    """实时库存 — 直接读 SQLite"""
+    with get_db() as conn:
+        s = conn.execute("SELECT id, name_zh FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not s:
+            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
+        p = conn.execute("SELECT * FROM products WHERE supplier_id = ? AND sku = ?", (supplier_id, sku)).fetchone()
+
+    if not p:
+        raise HTTPException(status_code=404, detail=f"SKU {sku} 不存在")
+
+    product = _row_to_product(p)
+    return {
+        "supplier_id": supplier_id,
+        "supplier_name": s["name_zh"],
+        "sku": sku,
+        "product_name": product["name_zh"],
+        "inventory_status": product["inventory"]["status"],
+        "quantity": product["inventory"]["quantity"],
+        "unit": product["inventory"]["unit"],
+        "lead_time_days": product.get("inventory_lead_time_days", 0),
+        "supply_ability_monthly": product.get("supply_ability_monthly", 0),
+        "_meta": {"source": "linkmoney_hosted", "is_live": True},
+    }
+
+
+class SupplierQuoteRequest(BaseModel):
+    """海外采购方通过工厂专属 MCP 提交询价"""
+    buyer_id: str = ""
+    buyer_email: str = ""
+    quantity: int = 1000
+    target_price_usd: float = 0
+    message: str = ""
+    delivery_deadline: str = ""
+
+
+@app.post("/mcp/supplier/{supplier_id}/quote")
+def supplier_mcp_submit_quote(supplier_id: str, req: SupplierQuoteRequest):
+    """接收 RFQ，写入 rfqs 表"""
+    with get_db() as conn:
+        s = conn.execute("SELECT id, name_zh, email FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not s:
+            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
+
+        rfq_id = f"rfq-{supplier_id}-{int(time.time())}"
+        now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute("""
+            INSERT INTO rfqs(id, supplier_id, buyer_id, sku, quantity, target_price_usd,
+                           contact_email, status, created_at, message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        """, (
+            rfq_id, supplier_id, req.buyer_id or "anonymous", "",
+            req.quantity, req.target_price_usd,
+            req.buyer_email, now_iso, req.message,
+        ))
+        conn.commit()
+
+    return {
+        "status": "submitted",
+        "rfq_id": rfq_id,
+        "supplier_id": supplier_id,
+        "supplier_name": s["name_zh"],
+        "message": f"询价已提交给 {s['name_zh']}，工厂会通过邮箱 {s['email']} 收到通知",
+    }
+
+
+# ===== v3.3: 工厂产品管理 API（对话式，无需 Web UI）=====
+
+class ProductItem(BaseModel):
+    """单个产品（增删改用）"""
+    sku: str
+    name_zh: str = ""
+    name_en: str = ""
+    material: str = ""
+    grade: str = ""
+    specs: dict = {}
+    pricing_tiers: list = []
+    moq: int = 1
+    trade_terms: str = "FOB"
+    port: str = ""
+    price_currency: str = "USD"
+    price_unit: str = "pc"
+    inventory_status: str = "in_stock"
+    inventory_quantity: int = 0
+    inventory_unit: str = "pc"
+    inventory_lead_time_days: int = 7
+    hs_code: str = ""
+    payment_terms: str = ""
+    sample_available: int = 0
+    customized: int = 0
+    certifications: list = []
+    packaging_details: str = ""
+    supply_ability_monthly: int = 0
+    description: str = ""
+    description_en: str = ""
+    images: list = []
+
+
+class UpdateProductsRequest(BaseModel):
+    """批量增删改产品"""
+    verification_token: str = ""
+    upsert: list = []   # 新增或更新（按 supplier_id + sku 去重）
+    delete_skus: list = []  # 要删除的 SKU 列表
+
+
+@app.post("/suppliers/{supplier_id}/products")
+def update_supplier_products(supplier_id: str, req: UpdateProductsRequest):
+    """工厂通过 Agent 对话增删改产品（托管模式核心管理端点）
+
+    使用场景：
+    - 工厂老板说"帮我添加一个 M10 螺栓产品，单价 0.5 美元"
+    - Agent 调用此端点，传入 upsert 列表
+    - 产品立即生效，海外 Agent 可查询
+    """
+    with get_db() as conn:
+        # 1. 验证 supplier 存在
+        s = conn.execute("SELECT id, verification_token, email_verified FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not s:
+            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
+
+        # 2. 鉴权
+        token_ok = req.verification_token and req.verification_token == s["verification_token"]
+        if not token_ok and not bool(s["email_verified"]):
+            raise HTTPException(status_code=403, detail="需要有效的 verification_token 或已验证的邮箱")
+
+        now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        upserted = 0
+        deleted = 0
+
+        # 3. upsert 产品
+        for p in req.upsert:
+            # 兼容 dict 和 ProductItem 对象
+            get = (lambda k: p.get(k, "") if isinstance(p, dict) else getattr(p, k, ""))
+            conn.execute("""
+                INSERT OR REPLACE INTO products(
+                    supplier_id, sku, name_zh, name_en, category, material, grade,
+                    specs, pricing_tiers, moq, trade_terms, port,
+                    price_currency, price_type, price_unit,
+                    inventory_status, inventory_quantity, inventory_unit, inventory_lead_time_days,
+                    hs_code, payment_terms, sample_available, customized,
+                    certifications, packaging_details, supply_ability_monthly,
+                    description, description_en, images,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                supplier_id, get("sku"), get("name_zh"), get("name_en"),
+                "", get("material"), get("grade"),
+                json.dumps(get("specs") or {}, ensure_ascii=False),
+                json.dumps(get("pricing_tiers") or [], ensure_ascii=False),
+                get("moq") or 1, get("trade_terms") or "FOB", get("port") or "",
+                get("price_currency") or "USD", get("trade_terms") or "FOB", get("price_unit") or "pc",
+                get("inventory_status") or "in_stock", get("inventory_quantity") or 0, get("inventory_unit") or "pc", get("inventory_lead_time_days") or 7,
+                get("hs_code") or "", get("payment_terms") or "", get("sample_available") or 0, get("customized") or 0,
+                json.dumps(get("certifications") or [], ensure_ascii=False),
+                get("packaging_details") or "", get("supply_ability_monthly") or 0,
+                get("description") or "", get("description_en") or "",
+                json.dumps(get("images") or [], ensure_ascii=False),
+                "active", now_iso, now_iso,
+            ))
+            upserted += 1
+
+        # 4. 删除产品
+        for sku in req.delete_skus:
+            conn.execute("DELETE FROM products WHERE supplier_id = ? AND sku = ?", (supplier_id, sku))
+            deleted += 1
+
+        conn.commit()
+        _supplier_cache.invalidate("find:")
+
+    return {
+        "status": "updated",
+        "supplier_id": supplier_id,
+        "upserted": upserted,
+        "deleted": deleted,
+        "message": f"产品已更新：新增/修改 {upserted} 个，删除 {deleted} 个。海外 Agent 可立即查询。",
+    }
+
+
+@app.post("/suppliers/{supplier_id}/upload_csv")
+async def upload_products_csv(supplier_id: str, request: Request):
+    """CSV 批量导入产品（工厂通过 Agent 上传 Excel 导出的 CSV）
+
+    CSV 列（顺序无关，按表头匹配）：
+    sku, name_zh, name_en, material, grade, moq, unit_price_usd,
+    inventory_quantity, trade_terms, port, hs_code, payment_terms
+
+    鉴权：请求头 X-Verification-Token 或查询参数 verification_token
+    """
+    # 鉴权
+    token = request.headers.get("X-Verification-Token", "") or request.query_params.get("verification_token", "")
+    with get_db() as conn:
+        s = conn.execute("SELECT id, verification_token, email_verified, category FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not s:
+            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
+        token_ok = token and token == s["verification_token"]
+        if not token_ok and not bool(s["email_verified"]):
+            raise HTTPException(status_code=403, detail="需要有效的 verification_token 或已验证的邮箱")
+        supplier_category = s["category"]
+
+    # 读取 CSV 内容
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="请求体为空，请上传 CSV 内容")
+
+    # 尝试 UTF-8 和 GBK 解码（兼容中文 Excel）
+    csv_text = None
+    for enc in ["utf-8", "gbk", "gb2312", "latin-1"]:
+        try:
+            csv_text = body.decode(enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    if not csv_text:
+        raise HTTPException(status_code=400, detail="CSV 解码失败，请用 UTF-8 编码")
+
+    import csv as csv_module
+    import io
+    reader = csv_module.DictReader(io.StringIO(csv_text))
+    rows = list(reader)
+    if not rows:
+        raise HTTPException(status_code=400, detail="CSV 无数据行")
+
+    now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+    imported = 0
+    errors = []
+    with get_db() as conn:
+        for i, row in enumerate(rows, start=2):  # 行号从 2 开始（1 是表头）
+            sku = (row.get("sku") or row.get("SKU") or "").strip()
+            if not sku:
+                errors.append(f"第 {i} 行：sku 为空，跳过")
+                continue
+            name_zh = (row.get("name_zh") or row.get("产品名") or sku).strip()
+            name_en = (row.get("name_en") or "").strip()
+            material = (row.get("material") or "").strip()
+            grade = (row.get("grade") or "").strip()
+            moq = int(row.get("moq") or 1)
+            unit_price = float(row.get("unit_price_usd") or row.get("price") or 0)
+            inv_qty = int(row.get("inventory_quantity") or row.get("stock") or 0)
+            trade_terms = (row.get("trade_terms") or "FOB").strip()
+            port = (row.get("port") or "Ningbo").strip()
+            hs_code = (row.get("hs_code") or "").strip()
+            payment_terms = (row.get("payment_terms") or "").strip()
+
+            # 构造阶梯价
+            pricing_tiers = [
+                {"min_qty": 1, "max_qty": 999, "unit_price_usd": unit_price},
+                {"min_qty": 1000, "max_qty": 9999, "unit_price_usd": round(unit_price * 0.85, 3)},
+                {"min_qty": 10000, "max_qty": None, "unit_price_usd": round(unit_price * 0.72, 3)},
+            ] if unit_price > 0 else []
+
+            try:
+                conn.execute("""
+                    INSERT OR REPLACE INTO products(
+                        supplier_id, sku, name_zh, name_en, category, material, grade,
+                        specs, pricing_tiers, moq, trade_terms, port,
+                        price_currency, price_type, price_unit,
+                        inventory_status, inventory_quantity, inventory_unit, inventory_lead_time_days,
+                        hs_code, payment_terms, sample_available, customized,
+                        status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    supplier_id, sku, name_zh, name_en, supplier_category,
+                    material, grade, "{}",
+                    json.dumps(pricing_tiers, ensure_ascii=False),
+                    moq, trade_terms, port,
+                    "USD", trade_terms, "pc",
+                    "in_stock" if inv_qty > 0 else "unknown", inv_qty, "pc", 7,
+                    hs_code, payment_terms, 0, 0,
+                    "active", now_iso, now_iso,
+                ))
+                imported += 1
+            except Exception as e:
+                errors.append(f"第 {i} 行 {sku}: {e}")
+
+        conn.commit()
+        _supplier_cache.invalidate("find:")
+
+    return {
+        "status": "imported",
+        "supplier_id": supplier_id,
+        "imported": imported,
+        "errors": errors[:10],
+        "error_count": len(errors),
+        "message": f"CSV 导入完成：成功 {imported} 个，失败 {len(errors)} 个",
+    }
+
+
+# ===== v3.2: 数据库管理端点 =====
+
+@app.post("/admin/reload")
+def admin_reload_db(x_api_key: str = Header(None, alias="X-API-Key")):
+    """强制重新从 database.json 导入数据到 SQLite（管理端点，需 API key）。
+
+    使用场景：
+    - database.json 更新后（新增工厂/产品/价格修改），触发此端点同步到 SQLite
+    - 不需要删除 DB 文件，不丢失运行时数据（rfqs/quotes/verifications 等）
+    - 使用 INSERT OR REPLACE，幂等
+
+    鉴权：需要有效的 API key（LINKMONEY_API_KEYS 之一）
+    """
+    # 鉴权
+    if not _API_KEYS:
+        raise HTTPException(status_code=503, detail="服务端未配置 API keys，无法鉴权")
+    if x_api_key not in _API_KEYS:
+        raise HTTPException(status_code=403, detail="无效的 API key")
+
+    # 记录导入前的状态
+    before_count = 0
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT COUNT(*) as cnt FROM suppliers").fetchone()
+            before_count = row["cnt"] if row else 0
+    except Exception:
+        pass
+
+    # 强制重新导入
+    try:
+        init_db(force=True)
+    except Exception as e:
+        logger.error(f"/admin/reload 失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"重新导入失败: {e}")
+
+    # 记录导入后的状态
+    after_count = 0
+    product_count = 0
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT COUNT(*) as cnt FROM suppliers").fetchone()
+            after_count = row["cnt"] if row else 0
+            row = conn.execute("SELECT COUNT(*) as cnt FROM products").fetchone()
+            product_count = row["cnt"] if row else 0
+    except Exception:
+        pass
+
+    # 失效所有缓存
+    _supplier_cache.invalidate("find:")
+
+    json_ver, json_updated = _get_json_version()
+    logger.info(f"[admin/reload] 重新导入完成: suppliers {before_count} -> {after_count}, products={product_count}")
+
+    return {
+        "status": "reloaded",
+        "json_version": json_ver,
+        "json_last_updated": json_updated,
+        "suppliers_before": before_count,
+        "suppliers_after": after_count,
+        "products_count": product_count,
+        "cache_invalidated": True,
+        "message": f"数据库已重新导入：{after_count} 家工厂，{product_count} 个产品",
+    }
+
+
+@app.get("/admin/db_status")
+def admin_db_status(x_api_key: str = Header(None, alias="X-API-Key")):
+    """查看数据库状态（管理端点，需 API key）"""
+    if not _API_KEYS:
+        raise HTTPException(status_code=503, detail="服务端未配置 API keys")
+    if x_api_key not in _API_KEYS:
+        raise HTTPException(status_code=403, detail="无效的 API key")
+
+    json_ver, json_updated = _get_json_version()
+    db_ver, db_updated = _get_db_json_version()
+
+    with get_db() as conn:
+        s_count = conn.execute("SELECT COUNT(*) as cnt FROM suppliers").fetchone()["cnt"]
+        p_count = conn.execute("SELECT COUNT(*) as cnt FROM products").fetchone()["cnt"]
+        b_count = conn.execute("SELECT COUNT(*) as cnt FROM overseas_buyers").fetchone()["cnt"]
+        r_count = conn.execute("SELECT COUNT(*) as cnt FROM rfqs").fetchone()["cnt"]
+        skill_count = conn.execute("SELECT COUNT(*) as cnt FROM suppliers WHERE agent_skill_installed = 1").fetchone()["cnt"]
+
+    needs_reload = (json_ver != db_ver) or (json_updated != db_updated)
+
+    return {
+        "json": {"version": json_ver, "last_updated": json_updated, "path": str(JSON_FILE)},
+        "db": {"version": db_ver, "last_updated": db_updated, "path": DB_PATH},
+        "counts": {
+            "suppliers": s_count,
+            "products": p_count,
+            "buyers": b_count,
+            "rfqs": r_count,
+            "suppliers_with_skill": skill_count,
+        },
+        "needs_reload": needs_reload,
+        "message": "JSON 版本与 DB 不一致，建议调用 /admin/reload" if needs_reload else "数据库已是最新",
     }
 
 

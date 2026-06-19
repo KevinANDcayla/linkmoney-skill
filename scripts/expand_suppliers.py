@@ -103,6 +103,42 @@ CAT_TO_SUFFIX = {
 PAYMENT_TERMS = ["T/T, L/C, PayPal", "T/T, Western Union", "L/C, T/T", "T/T 30% deposit", "PayPal, T/T"]
 WARRANTY_OPTIONS = ["12 months", "24 months", "6 months", "18 months", "36 months"]
 
+# v3.2: 贸易术语（Incoterms 2020）
+TRADE_TERMS = ["FOB", "FOB", "FOB", "CIF", "EXW", "FCA", "DDP"]
+
+# v3.2: 计价单位（按品类）
+PRICE_UNITS = {
+    "fastener": "pc", "hardware": "pc", "electronics": "pc",
+    "injection_molding": "pc", "machinery": "set", "textile": "m",
+    "packaging": "pc", "auto_parts": "pc", "furniture": "pc",
+}
+
+# v3.2: 产品级认证（按品类，不同产品认证不同）
+PRODUCT_CERTS = {
+    "fastener": ["ISO 9001", "CE", "RoHS"],
+    "hardware": ["ISO 9001", "CE"],
+    "electronics": ["CE", "RoHS", "FCC", "REACH"],
+    "injection_molding": ["ISO 9001", "FDA"],
+    "machinery": ["CE", "ISO 9001", "GS"],
+    "textile": ["OEKO-TEX", "ISO 9001", "REACH"],
+    "packaging": ["ISO 9001", "FSC", "FDA"],
+    "auto_parts": ["IATF 16949", "ISO 9001", "CE"],
+    "furniture": ["CARB P2", "FSC", "ISO 9001"],
+}
+
+# v3.2: MOQ 范围（按品类）— B2B 最小起订量
+MOQ_RANGES = {
+    "fastener": (500, 10000),      # 紧固件量大
+    "hardware": (100, 2000),        # 五金
+    "electronics": (100, 5000),     # 电子元件
+    "injection_molding": (500, 5000),  # 注塑件
+    "machinery": (1, 10),           # 机械按套
+    "textile": (100, 5000),         # 纺织按米
+    "packaging": (500, 10000),      # 包装
+    "auto_parts": (50, 1000),       # 汽配
+    "furniture": (1, 50),           # 家具
+}
+
 # 海关编码（按主品类）
 HS_CODES = {
     "fastener": ["73181500", "73181600", "73169100", "73182400", "73182200"],
@@ -550,11 +586,11 @@ def generate_certifications(supplier_id):
 
 
 def _pricing_tiers(base_price):
-    """生成 3 个阶梯定价。"""
+    """生成 3 个阶梯定价（含 max_qty，对齐 Alibaba/1688 阶梯价结构）。"""
     return [
-        {"min_qty": 1000, "unit_price_usd": round(base_price, 3)},
-        {"min_qty": 10000, "unit_price_usd": round(base_price * 0.85, 3)},
-        {"min_qty": 50000, "unit_price_usd": round(base_price * 0.72, 3)},
+        {"min_qty": 1, "max_qty": 999, "unit_price_usd": round(base_price, 3)},
+        {"min_qty": 1000, "max_qty": 9999, "unit_price_usd": round(base_price * 0.85, 3)},
+        {"min_qty": 10000, "max_qty": None, "unit_price_usd": round(base_price * 0.72, 3)},
     ]
 
 
@@ -1653,7 +1689,7 @@ def _generate_weight_package(category, p):
         return 0.1, "30x20x15 cm", 100
 
 
-def _extend_product(product, main_category, supplier_id):
+def _extend_product(product, main_category, supplier_id, port="Ningbo"):
     """为产品添加扩展字段，对齐 Alibaba attributes + schema.org Product 标准。"""
     sku = product["sku"]
 
@@ -1698,6 +1734,35 @@ def _extend_product(product, main_category, supplier_id):
     # 定制（60% 支持定制）
     product["customized"] = 1 if random.random() < 0.6 else 0
 
+    # ===== v3.2: P0+P1 字段（对齐 Alibaba/1688/schema.org）=====
+    # MOQ（最小起订量）— B2B 核心，按品类合理范围
+    moq_range = MOQ_RANGES.get(main_category, (100, 1000))
+    product["moq"] = random.randint(moq_range[0], moq_range[1])
+
+    # 贸易术语 + 起运港
+    product["trade_terms"] = random.choice(TRADE_TERMS)
+    product["port"] = port
+
+    # 价格元数据
+    product["price_currency"] = "USD"
+    product["price_type"] = product["trade_terms"]  # 与 trade_terms 对齐
+    product["price_unit"] = PRICE_UNITS.get(main_category, "pc")
+    # 报价有效期：未来 30-90 天
+    valid_days = random.randint(30, 90)
+    product["price_validity"] = (datetime.now() + timedelta(days=valid_days)).strftime("%Y-%m-%d")
+
+    # 产品级认证（从品类认证池中随机选 1-3 个）
+    cert_pool = PRODUCT_CERTS.get(main_category, ["ISO 9001"])
+    cert_count = min(len(cert_pool), random.randint(1, 3))
+    product["certifications"] = random.sample(cert_pool, cert_count)
+
+    # 包装详情文本
+    pkg_qty = product["package_qty"]
+    product["packaging_details"] = f"{pkg_qty} pcs/carton, {product['package_size']}, gross weight {round(product['weight_kg'] * pkg_qty, 2)} kg"
+
+    # 月产能（基于库存量的 3-10 倍）
+    product["supply_ability_monthly"] = product["inventory_quantity"] * random.randint(3, 10)
+
     # 状态与时间戳
     product["status"] = "active"
     product["created_at"] = random_created_at()
@@ -1706,17 +1771,36 @@ def _extend_product(product, main_category, supplier_id):
     return product
 
 
-def generate_products(supplier_id, category, count):
-    """为一家工厂生成 count 个产品（含扩展字段）。"""
-    generators = PRODUCT_GENERATORS.get(category, [_p_bolt])
+def generate_products(supplier_id, category, count, port="Ningbo"):
+    """为一家工厂生成 count 个产品（含扩展字段）。
+
+    v3.2: 保证 (supplier_id, sku) 唯一，避免 UNIQUE 索引合并导致产品数减少。
+    """
+    generators = PRODUCT_GENERATORS.get(category)
+    if not generators:
+        # v3.3: 品类未找到时警告，避免静默 fallback 到螺栓
+        import warnings
+        warnings.warn(f"未知品类 '{category}'（供应商 {supplier_id}），fallback 到紧固件")
+        generators = [_p_bolt]
     products = []
+    seen_skus = set()  # v3.2: 同一供应商内 SKU 去重
     # 打乱生成器顺序，取前 count 个（允许重复但优先不重复）
     shuffled = generators[:]
     random.shuffle(shuffled)
     for i in range(1, count + 1):
         gen = shuffled[(i - 1) % len(shuffled)]
         product = gen(supplier_id, i)
-        product = _extend_product(product, category, supplier_id)
+        # v3.2: SKU 去重 — 若冲突则追加序号后缀
+        base_sku = product["sku"]
+        sku = base_sku
+        suffix = 2
+        while sku in seen_skus:
+            sku = f"{base_sku}-{suffix}"
+            suffix += 1
+        product["sku"] = sku
+        seen_skus.add(sku)
+        # 同步更新 product.id（基于 sku 不变，但确保 id 也唯一）
+        product = _extend_product(product, category, supplier_id, port)
         products.append(product)
     return products
 
@@ -1782,7 +1866,7 @@ def generate_supplier(belt, category, seq_num, existing_ids):
 
     # 产品
     product_count = random.randint(2, 5)
-    products = generate_products(supplier_id, category, product_count)
+    products = generate_products(supplier_id, category, product_count, belt["port"])
 
     supplier = {
         "id": supplier_id,
@@ -1852,26 +1936,96 @@ def main():
         data = json.load(f)
 
     old_count = len(data["suppliers"])
-    print(f"\n现有供应商: {old_count} 家 (工厂数据将保留不变)")
+    print(f"\n现有供应商: {old_count} 家")
+
+    # v3.2: 修复重复数据（email/phone/name_zh 必须唯一，否则唯一索引创建失败）
+    # v3.3: 58 家假 endpoint 改为托管模式
+    seen_emails = set()
+    seen_phones = set()
+    seen_names = set()
+    fixed_count = 0
+    hosted_count = 0
+    for supplier in data["suppliers"]:
+        sid = supplier["id"]
+        # v3.3: 假 endpoint 改为托管模式
+        old_endpoint = supplier.get("skill_mcp_endpoint", "")
+        if old_endpoint and "linkmoney.online/mcp/supplier/" not in old_endpoint:
+            supplier["skill_mcp_endpoint"] = f"https://linkmoney.online/mcp/supplier/{sid}"
+            supplier["data_source_type"] = "hosted"
+            hosted_count += 1
+        elif supplier.get("agent_skill_installed"):
+            # 已装 Skill 但无 endpoint，也改为托管
+            supplier["skill_mcp_endpoint"] = f"https://linkmoney.online/mcp/supplier/{sid}"
+            supplier["data_source_type"] = "hosted"
+            hosted_count += 1
+
+        # 修复重复 email
+        email = supplier.get("email", "")
+        if not email or email in seen_emails or email == "kevin@coze.email":
+            supplier["email"] = f"supplier-{sid}@linkmoney.online"
+            fixed_count += 1
+        seen_emails.add(supplier["email"])
+
+        # 修复重复 phone
+        phone = supplier.get("phone", "")
+        if not phone or phone in seen_phones or phone == "+86-186-0000-0000":
+            supplier["phone"] = random_phone()
+            fixed_count += 1
+        seen_phones.add(supplier["phone"])
+
+        # 修复重复 name_zh（加序号后缀）
+        name = supplier.get("name_zh", "")
+        if name in seen_names:
+            # 找一个不冲突的名字
+            base_name = name
+            suffix = 2
+            while f"{base_name}（{suffix}）" in seen_names:
+                suffix += 1
+            supplier["name_zh"] = f"{base_name}（{suffix}）"
+            fixed_count += 1
+        seen_names.add(supplier["name_zh"])
+
+    if fixed_count:
+        print(f"修复重复数据: {fixed_count} 处（email/phone/name_zh）")
+    if hosted_count:
+        print(f"修复假 endpoint: {hosted_count} 家改为托管模式")
 
     # 2. 为每家供应商重新生成产品数据（保留工厂数据不变）
+    # v3.3: 修复品类名拼写不一致（electronic → electronics）
+    CATEGORY_NORMALIZE = {
+        "electronic": "electronics",
+        "auto_part": "auto_parts",
+        "injection": "injection_molding",
+        "mold": "injection_molding",
+    }
     total_products = 0
     category_product_stats = {}
+    fixed_categories = 0
     for supplier in data["suppliers"]:
         sid = supplier["id"]
         category = supplier["category"]
+        # 品类名归一化
+        if category in CATEGORY_NORMALIZE:
+            old_cat = category
+            category = CATEGORY_NORMALIZE[category]
+            supplier["category"] = category
+            fixed_categories += 1
         old_product_count = len(supplier.get("products", []))
         if old_product_count == 0:
             old_product_count = random.randint(2, 5)
-        new_products = generate_products(sid, category, old_product_count)
+        # 从供应商 location 获取起运港
+        supplier_port = supplier.get("location", {}).get("port", "Ningbo")
+        new_products = generate_products(sid, category, old_product_count, supplier_port)
         supplier["products"] = new_products
         total_products += len(new_products)
         category_product_stats[category] = category_product_stats.get(category, 0) + len(new_products)
+    if fixed_categories:
+        print(f"修复品类名拼写: {fixed_categories} 家供应商（electronic→electronics 等）")
 
     print(f"产品已重新生成: {total_products} 个")
 
     # 3. 更新版本信息
-    data["version"] = "3.1.0"
+    data["version"] = "3.2.0"
     data["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # 4. 备份原文件

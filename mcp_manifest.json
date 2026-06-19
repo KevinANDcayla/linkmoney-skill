@@ -1,1 +1,96 @@
-{"name":"linkmoney","version":"3.0.1","description":"LinkMoney — 让全球采购 Agent 主动找上中国供应商的链接器 Skill（v3.0 中间 Agent 维护层）","tools":[{"name":"find_china_supplier","description":"海外采购方找中国供应商（混合架构：缓存 + 厂家 MCP 直连）","endpoint":"/find_china_supplier"},{"name":"get_pricing","description":"查供应商阶梯报价（MOQ + 数量档位）","endpoint":"/get_pricing"},{"name":"get_inventory","description":"查供应商实时库存（直连厂家 MCP）","endpoint":"/get_inventory"},{"name":"match_spec","description":"规格匹配（按品类+规格+认证筛选）","endpoint":"/match_spec"},{"name":"download_cert","description":"下载供应商认证（ISO/CE/FDA 等）","endpoint":"/download_cert"},{"name":"multi_lang_inquiry","description":"多语言自动询盘生成（中/英/西/阿/法/俄/日/韩等）","endpoint":"/multi_lang_inquiry"},{"name":"submit_rfq","description":"提交 RFQ（含规格 + 数量 + 交付要求）","endpoint":"/submit_rfq"},{"name":"get_supplier_contact","description":"查看供应商完整联系方式（已装 Skill 可见）","endpoint":"/get_supplier_contact"},{"name":"post_requirement","description":"海外采购方发布公开需求（需求广场）","endpoint":"/post_requirement"},{"name":"browse_requirements","description":"浏览公开需求广场","endpoint":"/browse_requirements"},{"name":"leave_review","description":"交易完成后买卖双方互评（v3.0，5 维度）","endpoint":"/leave_review"},{"name":"trust_score","description":"查询供应商/采购方信任评分与等级","endpoint":"/trust_score"},{"name":"stats","description":"查询全局统计数据（含缓存命中率）","endpoint":"/stats"}],"platform":{"tools_total":26,"breakdown":{"public":13,"chinese":6,"internal":7},"chinese_tools":[{"name":"evaluate_sme","endpoint":"/evaluate_sme","purpose":"5 维评估中国制造业 AI 出海 Agent 化水平"},{"name":"register_supplier","endpoint":"/register_supplier","purpose":"中方工厂注册入驻"},{"name":"get_my_rfqs","endpoint":"/get_my_rfqs","purpose":"工厂查询自己收到的 RFQ 询盘"},{"name":"send_quote","endpoint":"/send_quote","purpose":"供应商对 RFQ 报价并邮件通知采购方"},{"name":"bid_on_requirement","endpoint":"/bid_on_requirement","purpose":"供应商对公开需求报价"},{"name":"outreach_buyer","endpoint":"/outreach_buyer","purpose":"供应商主动外联采购方（信任分≥60）"}],"internal_tools":[{"name":"agent_status","endpoint":"/agent/status","purpose":"[中间 Agent] 状态 + 健康度概览"},{"name":"agent_health","endpoint":"/agent/health","purpose":"[中间 Agent] 厂家 MCP 健康检查报告"},{"name":"agent_routing","endpoint":"/agent/routing","purpose":"[中间 Agent] RFQ 路由推荐"},{"name":"agent_alerts","endpoint":"/agent/alerts","purpose":"[中间 Agent] 告警列表"},{"name":"agent_maintenance","endpoint":"/agent/maintenance","purpose":"[中间 Agent] 维护日志"},{"name":"agent_optimize","endpoint":"/agent/optimize","purpose":"[中间 Agent] 自我优化分析报告"},{"name":"agent_maintain","endpoint":"/agent/maintain","purpose":"[中间 Agent] 手动触发维护任务"}]},"middle_agent":{"id":"linkmoney-middle-agent","version":"3.0.0","name_zh":"LinkMoney 中间 Agent","description":"双边 Skill 之间的中维护者：监控厂家 MCP 健康、决定 RFQ 路由、发现异常告警、基于历史指标自我优化。","endpoints":["/agent/status","/agent/health","/agent/routing","/agent/alerts","/agent/maintenance","/agent/optimize","/agent/maintain"]},"homepage":"https://linkmoney.online","repository":"https://github.com/KevinANDcayla/linkmoney-skill"}
+{
+  "name": "linkmoney",
+  "version": "4.1.0",
+  "description": "LinkMoney — Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商。201 家工厂，10 个品类，8-15 家智能匹配，实时报价库存，5 秒发 RFQ。v3.3 中心化托管，工厂零门槛接入。",
+  "homepage": "https://linkmoney.online",
+  "skill_md": "https://linkmoney.online/skill.md",
+  "install_command": "npx skills add KevinANDcayla/linkmoney-skill",
+  "ai_plugin_url": "https://linkmoney.online/.well-known/ai-plugin.json",
+  "tools": [
+    {"name": "find_china_supplier", "description": "海外采购方找中国供应商（v4.0 7 维加权评分，返回 8-15 家）", "endpoint": "/find_china_supplier"},
+    {"name": "get_pricing", "description": "查供应商阶梯报价（MOQ + 数量档位）", "endpoint": "/get_pricing"},
+    {"name": "get_inventory", "description": "查供应商实时库存（直连厂家 MCP）", "endpoint": "/get_inventory"},
+    {"name": "match_spec", "description": "规格匹配（按品类+规格+认证筛选）", "endpoint": "/match_spec"},
+    {"name": "download_cert", "description": "下载供应商认证（ISO/CE/FDA 等）", "endpoint": "/download_cert"},
+    {"name": "multi_lang_inquiry", "description": "多语言自动询盘生成（中/英/西/阿/法/俄/日/韩等）", "endpoint": "/multi_lang_inquiry"},
+    {"name": "submit_rfq", "description": "提交 RFQ（含规格 + 数量 + 交付要求）", "endpoint": "/submit_rfq"},
+    {"name": "get_supplier_contact", "description": "查看供应商完整联系方式（已装 Skill 可见）", "endpoint": "/get_supplier_contact"},
+    {"name": "post_requirement", "description": "海外采购方发布公开需求（需求广场）", "endpoint": "/post_requirement"},
+    {"name": "browse_requirements", "description": "浏览公开需求广场", "endpoint": "/browse_requirements"},
+    {"name": "leave_review", "description": "交易完成后买卖双方互评（v3.0，5 维度）", "endpoint": "/leave_review"},
+    {"name": "trust_score", "description": "查询供应商/采购方信任评分与等级", "endpoint": "/trust_score"},
+    {"name": "stats", "description": "查询全局统计数据（含缓存命中率）", "endpoint": "/stats"}
+  ],
+  "platform": {
+    "tools_total": 43,
+    "breakdown": {
+      "public": 13,
+      "chinese": 8,
+      "internal": 7,
+      "marketplace": 15
+    },
+    "chinese_tools": [
+      {"name": "evaluate_sme", "endpoint": "/evaluate_sme", "purpose": "5 维评估中国制造业 AI 出海 Agent 化水平"},
+      {"name": "register_supplier", "endpoint": "/register_supplier", "purpose": "中方工厂注册入驻（v3.3 自动激活托管 MCP）"},
+      {"name": "update_products", "endpoint": "/suppliers/{id}/products", "purpose": "v3.3 工厂通过对话增删改产品（托管模式核心管理端点）"},
+      {"name": "upload_products_csv", "endpoint": "/suppliers/{id}/upload_csv", "purpose": "v3.3 CSV 批量导入产品（兼容中文 Excel）"},
+      {"name": "get_my_rfqs", "endpoint": "/get_my_rfqs", "purpose": "工厂查询自己收到的 RFQ 询盘"},
+      {"name": "send_quote", "endpoint": "/send_quote", "purpose": "供应商对 RFQ 报价并邮件通知采购方"},
+      {"name": "bid_on_requirement", "endpoint": "/bid_on_requirement", "purpose": "供应商对公开需求报价"},
+      {"name": "outreach_buyer", "endpoint": "/outreach_buyer", "purpose": "供应商主动外联采购方（信任分≥60）"}
+    ],
+    "internal_tools": [
+      {"name": "agent_status", "endpoint": "/agent/status", "purpose": "中间 Agent 维护层状态总览"},
+      {"name": "agent_health", "endpoint": "/agent/health", "purpose": "全量厂家 MCP 健康检查（8 并发 × 8s 超时）"},
+      {"name": "agent_routing", "endpoint": "/agent/routing", "purpose": "RFQ 智能路由（信任分 + 健康 + 金标）"},
+      {"name": "agent_alerts", "endpoint": "/agent/alerts", "purpose": "告警列表（厂家离线/降级/恢复）"},
+      {"name": "agent_maintenance", "endpoint": "/agent/maintenance", "purpose": "维护动作日志"},
+      {"name": "agent_optimize", "endpoint": "/agent/optimize", "purpose": "自我优化报告（每周生成）"},
+      {"name": "agent_maintain", "endpoint": "/agent/maintain", "purpose": "一键执行维护（健康检查+路由+告警+优化）"}
+    ],
+    "marketplace_tools": [
+      {"name": "marketplace_stats", "endpoint": "/marketplace/stats", "purpose": "Agent Marketplace 全局统计"},
+      {"name": "list_agents", "endpoint": "/marketplace/agents", "purpose": "列出所有 Agent（采购方/工厂/公正官）"},
+      {"name": "get_agent", "endpoint": "/marketplace/agents/{id}", "purpose": "Agent 详情"},
+      {"name": "list_rfqs", "endpoint": "/marketplace/rfqs", "purpose": "RFQ 市场列表（支持状态/品类筛选）"},
+      {"name": "get_rfq", "endpoint": "/marketplace/rfqs/{id}", "purpose": "RFQ 详情（含报价 + 阶段 + 记录）"},
+      {"name": "create_rfq", "endpoint": "/marketplace/rfqs", "purpose": "创建 RFQ（自动写入公正记录）"},
+      {"name": "list_quotes", "endpoint": "/marketplace/rfqs/{id}/quotes", "purpose": "RFQ 的所有报价"},
+      {"name": "create_quote", "endpoint": "/marketplace/rfqs/{id}/quotes", "purpose": "提交报价（自动写入公正记录）"},
+      {"name": "select_winner", "endpoint": "/marketplace/rfqs/{id}/winner", "purpose": "选定中标供应商（自动建 9 阶段 + 公正记录）"},
+      {"name": "list_stages", "endpoint": "/marketplace/rfqs/{id}/stages", "purpose": "RFQ 的 9 阶段执行进度"},
+      {"name": "update_stage", "endpoint": "/marketplace/stages/{id}", "purpose": "更新阶段状态（自动写入公正记录）"},
+      {"name": "list_records", "endpoint": "/marketplace/records", "purpose": "公正记录列表（含指纹哈希）"},
+      {"name": "get_record", "endpoint": "/marketplace/records/{id}", "purpose": "公正记录详情"},
+      {"name": "list_dashboard", "endpoint": "/marketplace/dashboard", "purpose": "仪表盘聚合数据"},
+      {"name": "get_dashboard", "endpoint": "/marketplace/dashboard/{rfq_id}", "purpose": "单个 RFQ 仪表盘"}
+    ]
+  },
+  "hosted_mcp": {
+    "version": "3.3.0",
+    "description": "中心化托管 — 每个工厂自动获得专属 MCP endpoint，无需自部署",
+    "endpoints": [
+      "GET /mcp/supplier/{id}/manifest.json",
+      "GET /mcp/supplier/{id}/products",
+      "GET /mcp/supplier/{id}/pricing?sku=&quantity=",
+      "GET /mcp/supplier/{id}/inventory?sku=",
+      "POST /mcp/supplier/{id}/quote"
+    ],
+    "data_source_type": "hosted"
+  },
+  "middle_agent": {
+    "version": "3.0.0",
+    "endpoints": ["/agent/status", "/agent/health", "/agent/routing", "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain"],
+    "description": "中间 Agent 维护层 —— 双边 Skill 之间的中维护者，承担平台自身健康"
+  },
+  "triggers": {
+    "strong_cn": ["中国供应商", "找中国工厂", "紧固件 OEM", "中国制造出口", "螺栓供应商", "AI 出海 Agent 化"],
+    "weak_cn": ["找工厂", "工厂合作", "想做点东西", "代工厂", "sourcing", "采购", "外贸", "出口", "跨境"],
+    "strong_en": ["China supplier", "China manufacturer", "China OEM", "fastener supplier", "sourcing agent China", "RFQ China"],
+    "weak_en": ["looking for a factory", "source from China", "source in China", "Made in China", "Chinese factory", "procure from China", "OEM China", "supplier in China"]
+  },
+  "supplier_count": 201,
+  "categories": ["fastener", "electronic", "packaging", "mechanical", "hardware", "injection_molding", "textile", "automotive", "furniture"],
+  "repository": "https://github.com/KevinANDcayla/linkmoney-skill",
+  "license": "MIT"
+}

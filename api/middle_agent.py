@@ -117,6 +117,7 @@ async def _check_one_supplier(sess: requests.Session, supplier: dict) -> dict:
 def run_health_check() -> dict:
     """
     同步执行：拉取所有装 Skill 的厂家，批量检查健康度。
+    v3.3: 托管模式（hosted）工厂 100% 在线（同进程），跳过外部探测。
     返回：
       - summary: 在线/降级/离线/未装 数量
       - results: 每个厂家一项
@@ -124,18 +125,36 @@ def run_health_check() -> dict:
     """
     with _db()() as conn:
         rows = conn.execute("""
-            SELECT id, name_zh, name_en, skill_mcp_endpoint
+            SELECT id, name_zh, name_en, skill_mcp_endpoint, data_source_type
             FROM suppliers
             WHERE skill_mcp_endpoint IS NOT NULL AND skill_mcp_endpoint != ''
         """).fetchall()
     suppliers = [dict(r) for r in rows]
 
+    # v3.3: 托管模式工厂直接标记 online，不探测
+    hosted_results = []
+    self_suppliers = []
+    for s in suppliers:
+        if s.get("data_source_type") == "hosted" or "linkmoney.online/mcp/supplier/" in (s.get("skill_mcp_endpoint") or ""):
+            hosted_results.append({
+                "supplier_id": s["id"],
+                "name": s.get("name_zh") or s.get("name_en") or s["id"],
+                "endpoint": s["skill_mcp_endpoint"],
+                "status": "online",
+                "latency_ms": 0,
+                "checked_at": datetime.now().isoformat(timespec="seconds"),
+                "note": "托管模式（hosted），同进程，100% 在线",
+            })
+        else:
+            self_suppliers.append(s)
+
+    # 只对自部署（self）工厂做外部 HTTP 探测
     sess = requests.Session()
     sess.headers.update({"User-Agent": f"LinkMoney-MiddleAgent/{AGENT_VERSION}"})
-    # 用 ThreadPoolExecutor 并发检查（从串行 51×8s=408s 降到 51/8×8s≈51s）
     with ThreadPoolExecutor(max_workers=_HEALTH_CONCURRENCY) as pool:
-        results = list(pool.map(lambda s: _check_one_supplier_sync(sess, s), suppliers))
+        self_results = list(pool.map(lambda s: _check_one_supplier_sync(sess, s), self_suppliers))
 
+    results = hosted_results + self_results
     summary = {
         "online": sum(1 for r in results if r["status"] == "online"),
         "degraded": sum(1 for r in results if r["status"] == "degraded"),
@@ -562,7 +581,7 @@ def report_ts_alert(severity: str, audit_type: str, reasons: list, details: dict
     details: 审核详情
     """
     try:
-        alert = _alert_store.add(
+        alert = ALERTS.add(
             severity=severity,
             category=f"trust_safety_{audit_type}",
             message=f"T&S {audit_type} {severity}: {', '.join(reasons[:3])}",

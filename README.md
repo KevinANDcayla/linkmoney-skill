@@ -128,10 +128,10 @@ bash deploy.sh         # One-click deploy
 | 9 | `get_supplier_contact` | View supplier contact (Skill-gated) |
 | 10 | `get_my_rfqs` | Factories query their received RFQs |
 | 11 | `evaluate_sme` | AI readiness assessment for factories |
-| 12 | `create_sample_skill` | Create sample buyer Agent Skill |
-| 13 | `distribute_skill` | Distribute to 10+ Agent platforms |
-| 14 | `discover_supplier` | Auto-discover suppliers via well-known |
-| 15 | `get_overseas_buyer_db` | Browse overseas buyer Agent database |
+| 12 | `register_supplier` | Factory registration (v3.3 auto-activate hosted MCP) |
+| 13 | `update_products` | Manage products via conversation (v3.3) |
+| 14 | `upload_products_csv` | CSV bulk import (v3.3) |
+| 15 | `register_buyer` | Overseas buyer self-registration (v3.3) |
 
 ---
 
