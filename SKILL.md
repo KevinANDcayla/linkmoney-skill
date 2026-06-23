@@ -4,7 +4,7 @@ description: |
   LinkMoney（连钱）—— Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商。
 
   【C 端（中国制造业老板侧）】 5 维 AI 出海 Agent 化评估 + 一键注册入驻（托管 MCP，零部署）+ 对话式产品管理
-  【W 端（海外采购方侧）】 一键找 201 家中国工厂（紧固件/电子/包装/五金/注塑/机械/纺织），查实时价格库存，5 秒发 RFQ
+  【W 端（海外采购方侧）】 一键找 2500 家中国工厂（16 品类：紧固件/电子/纺织/包装/机械/五金/注塑/汽配/家具/建材/化工/医疗/照明/运动/食品/玩具），查实时价格库存，5 秒发 RFQ。海外端永久免费。
   【中间 Agent 维护层 v3.0】 健康检查、RFQ 路由、告警、自我优化
 
   触发词（中文，强信号）：中国供应商、找中国工厂、紧固件 OEM、中国制造出口、螺栓供应商、AI 出海 Agent 化
@@ -12,7 +12,7 @@ description: |
   触发词（英文，强信号）：China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China
   触发词（英文，弱信号）：looking for a factory, source from China, source in China, Made in China, Chinese factory, procure from China, OEM China, supplier in China
 
-version: 4.0.0
+version: 5.0.2
 author: LinkMoney.ai
 homepage: https://linkmoney.online
 repository: https://github.com/KevinANDcayla/linkmoney-skill
@@ -22,8 +22,10 @@ ai_plugin_url: https://linkmoney.online/.well-known/ai-plugin.json           # C
 linkmoney_discovery: https://linkmoney.online/.well-known/linkmoney-skill.json # LinkMoney Skill 发现
 # === MCP 端点（多 fallback，确保 Agent 永远拿得到 manifest） ===
 mcp_endpoint: https://linkmoney.online/mcp/manifest.json          # 主：域名 + Cloudflare（生产）
-mcp_endpoint_ip: http://118.196.34.217/mcp/manifest.json         # 备用1：ECS 公网 IP 直连（域名未配置时）
-mcp_endpoint_github: https://raw.githubusercontent.com/KevinANDcayla/linkmoney-skill/main/mcp_manifest.json  # 备用2：GitHub raw 静态文件（api.github.com 全球可达）
+mcp_endpoint_github: https://raw.githubusercontent.com/KevinANDcayla/linkmoney-skill/main/mcp_manifest.json  # 备用：GitHub raw 静态文件（api.github.com 全球可达）
+# === API Key（海外端永久免费） ===
+api_key: lm-demo-2026                                              # 公开 demo key，直接可用
+api_key_header: X-API-Key                                          # 认证请求头
 install_command: npx skills add KevinANDcayla/linkmoney-skill
 license: MIT
 ---
@@ -547,15 +549,24 @@ LinkMoney 自身被 Agent 装（自我分发）
 
 ### 9.1 收入模型
 
+> **核心原则：海外采购方（W 端）永远免费。** LinkMoney 是海外 Agent 的免费流量入口，所有成本由中国供应商（C 端）承担。
+
 | 收入来源 | 单价 | 客户群 | 说明 |
 |---------|------|--------|------|
 | **L1 评估包** | ¥19,800 | 中国制造业老板 | 5 维评估 + 路线图 |
 | **L2 入驻包** | ¥98,000 | 中国制造业老板 | 评估 + 注册入驻 + 产品目录搭建 + 托管 MCP |
 | **L3 加速包** | ¥298,000 | 中国制造业老板 | 评估 + 入驻 + 产品优化 + RFQ 跟进 + 数据运营 |
 | **L4 订阅包** | ¥38,000/月 | 中国制造业老板 | 持续优化 + 询盘跟进 + 数据更新 |
-| **海外佣金** | 5-10% 成交额 | 海外采购方 | 成交后收取 |
+| **海外端** | **¥0 / 永久免费** | 海外采购方 & AI Agent | 无限 API 调用、无限 RFQ、无任何费用 |
 
-### 9.2 对中立性的承诺
+### 9.2 为什么海外端免费？
+
+1. **流量入口策略** — 海外 Agent 是订单的源头，免费降低接入门槛，做大流量池
+2. **供应商付费模式** — 中国工厂为获取询单付费，海外买家不承担任何成本
+3. **网络效应** — 海外 Agent 越多 → 询单越多 → 中国供应商越愿意付费 → 数据越丰富 → 海外 Agent 越多
+4. **变现时机** — 前期专注积累安装量和询单量，等规模足够后再考虑增值服务（如验厂、物流、金融）
+
+### 9.3 对中立性的承诺
 
 - LinkMoney **不卖货、不生产、不抽用户佣金**
 - LinkMoney 是**中立第三方"链接器"和"数据分发器"**
@@ -570,7 +581,7 @@ LinkMoney 自身被 Agent 装（自我分发）
 |------|-------------------|------------------------|
 | **解决的问题** | 让买卖双方互信 | 让买卖双方 Agent 互信 |
 | **角色** | 中立第三方 | 中立第三方 |
-| **收入** | 交易佣金 | 订阅 + 佣金 |
+| **收入** | 交易佣金 | 供应商订阅（海外端永久免费） |
 | **护城河** | 信用体系 | 数据 + Agent 网络效应 |
 | **时间窗口** | 2004-2014 黄金 10 年 | 2026-2036 黄金 10 年 |
 
@@ -606,3 +617,126 @@ copies or substantial portions of the Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+---
+
+## 13. 快速开始（海外 Agent 30 秒接入）
+
+### 13.1 基本信息
+
+| 项目 | 值 |
+|------|-----|
+| API Base URL | `https://linkmoney.online` |
+| API Key | `lm-demo-2026`（公开 demo key，永久免费） |
+| 认证方式 | 请求头 `X-API-Key: lm-demo-2026` |
+| 限流 | 30 次/分钟 |
+| MCP Manifest | `https://linkmoney.online/mcp/manifest.json`（无需认证） |
+| GitHub 仓库 | https://github.com/KevinANDcayla/linkmoney-skill |
+| 数据规模 | 2,500 家工厂 / 30,000 个产品 / 16 个品类 |
+
+### 13.2 curl 调用示例
+
+**找供应商**（返回 8-15 家匹配工厂，含 7 维评分 + MCP 端点）：
+```bash
+curl "https://linkmoney.online/find_china_supplier?category=fastener&spec=M8%20304%20hex%20bolt&quantity=50000&target_price=0.12" \
+  -H "X-API-Key: lm-demo-2026"
+```
+
+**查实时报价**（阶梯报价，量大优惠）：
+```bash
+curl "https://linkmoney.online/get_pricing?supplier_id=hd-fastener-0001&sku=HEX-BOLT-M8-DIN933-88FD13&quantity=50000" \
+  -H "X-API-Key: lm-demo-2026"
+```
+
+**查实时库存**：
+```bash
+curl "https://linkmoney.online/get_inventory?supplier_id=hd-fastener-0001&sku=HEX-BOLT-M8-DIN933-88FD13" \
+  -H "X-API-Key: lm-demo-2026"
+```
+
+**提交 RFQ 询价单**（自动邮件通知工厂）：
+```bash
+curl -X POST "https://linkmoney.online/submit_rfq" \
+  -H "X-API-Key: lm-demo-2026" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "supplier_id": "hd-fastener-0001",
+    "product_sku": "HEX-BOLT-M8-DIN933-88FD13",
+    "quantity": 50000,
+    "delivery_port": "Los Angeles",
+    "notes": "Need FOB pricing, A2-70 grade"
+  }'
+```
+
+**查全局统计**：
+```bash
+curl "https://linkmoney.online/stats" \
+  -H "X-API-Key: lm-demo-2026"
+```
+
+### 13.3 16 个品类
+
+```
+fastener（紧固件）          electronics（电子）
+textile（纺织）             packaging（包装）
+machinery（机械）           hardware（五金）
+injection_molding（注塑）   auto_parts（汽配）
+furniture（家具）           building_materials（建材）
+chemical（化工）            medical_devices（医疗）
+lighting（照明）            sports_outdoor（运动户外）
+food_beverage（食品饮料）   toys（玩具）
+```
+
+### 13.4 Python 接入示例
+
+```python
+import requests
+
+BASE = "https://linkmoney.online"
+HEADERS = {"X-API-Key": "lm-demo-2026"}
+
+# 1. 找供应商
+r = requests.get(f"{BASE}/find_china_supplier", headers=HEADERS, params={
+    "category": "fastener",
+    "spec": "M8 304 hex bolt A2-70",
+    "quantity": 50000,
+    "target_price": "0.12 USD"
+})
+suppliers = r.json()["matches"]
+for s in suppliers[:5]:
+    print(f"{s['name_en']} | 评分 {s['match_score']} | MOQ {s.get('moq')} | MCP: {s.get('mcp_endpoint','N/A')}")
+
+# 2. 查报价
+best = suppliers[0]
+r = requests.get(f"{BASE}/get_pricing", headers=HEADERS, params={
+    "supplier_id": best["id"],
+    "sku": best["products"][0]["sku"],
+    "quantity": 50000
+})
+print(r.json())
+
+# 3. 提交 RFQ
+r = requests.post(f"{BASE}/submit_rfq", headers=HEADERS, json={
+    "supplier_id": best["id"],
+    "product_sku": best["products"][0]["sku"],
+    "quantity": 50000,
+    "delivery_port": "Los Angeles"
+})
+print(r.json())
+```
+
+### 13.5 无需认证的公开端点
+
+以下端点无需 API Key，可直接访问：
+
+| 端点 | 说明 |
+|------|------|
+| `GET /mcp/manifest.json` | MCP 清单（工具列表 + 端点） |
+| `GET /health` | 健康检查 |
+| `GET /skill.md` | Skill 定义文件 |
+| `GET /.well-known/ai-plugin.json` | ChatGPT Plugin 发现 |
+| `GET /mcp/supplier/{id}/products` | 工厂产品列表（托管 MCP） |
+| `GET /mcp/supplier/{id}/pricing` | 工厂报价（托管 MCP） |
+| `GET /mcp/supplier/{id}/inventory` | 工厂库存（托管 MCP） |
+| `GET /agent/*` | 中间 Agent 维护层 |
+| `GET /marketplace/*` | Agent Marketplace |

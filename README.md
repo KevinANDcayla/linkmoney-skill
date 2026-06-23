@@ -12,8 +12,9 @@
   <a href="#-quick-start"><img src="https://img.shields.io/badge/quick_start-5_min-blue"></a>
   <a href="./SKILL.md"><img src="https://img.shields.io/badge/skill-MCP_Skill-orange"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green"></a>
-  <a href="https://linkmoney.online/mcp/manifest.json"><img src="https://img.shields.io/badge/MCP-30_tools-purple"></a>
-  <a href="#-middle-agent-v30"><img src="https://img.shields.io/badge/v3.0-middle_agent-blueviolet"></a>
+  <a href="https://linkmoney.online/mcp/manifest.json"><img src="https://img.shields.io/badge/MCP-43_tools-purple"></a>
+  <a href="https://linkmoney.online/en"><img src="https://img.shields.io/badge/demo-live_online-brightgreen"></a>
+  <a href="#-middle-agent-v30"><img src="https://img.shields.io/badge/v5.0-2500_factories-blueviolet"></a>
 </p>
 
 ---
@@ -21,7 +22,72 @@
 > **LinkMoney gives AI agents the ability to source products from real Chinese factories.**
 > Not an app. Not a website. Not a middleware. **It's an AI-native marketplace where agents do the sourcing.**
 
-> **v3.0 新增「中间 Agent 维护层」** — 在双边 Skill（C 端 + W 端）之间嵌入一个中维护者 Agent，承担厂家 MCP 健康检查、RFQ 智能路由、告警与自我优化。详见 [v3.0 中间 Agent](#-middle-agent-v30)。
+> **v5.0 大规模数据扩充** — 2,500 家工厂 / 30,000 个产品 / 16 个品类。海外端永久免费。详见 [快速开始](#-quick-start)。
+
+---
+
+## Quick Start
+
+### 1. Get API Key (Free Forever)
+
+```
+API Key: lm-demo-2026
+Header:  X-API-Key: lm-demo-2026
+Base URL: https://linkmoney.online
+```
+
+No signup. No credit card. Just start calling.
+
+### 2. Find Suppliers (curl)
+
+```bash
+curl "https://linkmoney.online/find_china_supplier?category=fastener&spec=M8%20304%20hex%20bolt&quantity=50000" \
+  -H "X-API-Key: lm-demo-2026"
+```
+
+Returns 8-15 ranked suppliers with 7-dimension scores, MOQ, pricing, and MCP endpoints.
+
+### 3. Python Example
+
+```python
+import requests
+
+BASE = "https://linkmoney.online"
+HEADERS = {"X-API-Key": "lm-demo-2026"}
+
+# Find suppliers
+r = requests.get(f"{BASE}/find_china_supplier", headers=HEADERS, params={
+    "category": "fastener",
+    "spec": "M8 304 hex bolt A2-70",
+    "quantity": 50000,
+    "target_price": "0.12 USD"
+})
+for s in r.json()["matches"][:5]:
+    print(f"{s['name_en']} | score: {s['match_score']} | MOQ: {s.get('moq')}")
+
+# Get pricing
+r = requests.get(f"{BASE}/get_pricing", headers=HEADERS, params={
+    "supplier_id": r.json()["matches"][0]["id"],
+    "sku": "HEX-BOLT-M8-DIN933-88FD13",
+    "quantity": 50000
+})
+print(r.json())
+
+# Submit RFQ
+r = requests.post(f"{BASE}/submit_rfq", headers=HEADERS, json={
+    "supplier_id": "hd-fastener-0001",
+    "product_sku": "HEX-BOLT-M8-DIN933-88FD13",
+    "quantity": 50000,
+    "delivery_port": "Los Angeles"
+})
+print(r.json())
+```
+
+### 4. Install as Skill
+
+```bash
+npx skills add KevinANDcayla/linkmoney-skill
+```
 
 ---
 
@@ -46,34 +112,24 @@ Overseas Buyer's AI Agent                 Chinese Factory's MCP Server
 
 ### Key Features
 
-- **30 MCP Tools** (v3.0) — search, compare, quote, negotiate, transact, audit, maintain
+- **43 MCP Tools** (v5.0) — search, compare, quote, negotiate, transact, audit, maintain, marketplace
+- **2,500 Verified Factories** — 30,000+ products across 16 categories, 833 with live MCP endpoints
 - **Hybrid Architecture** — LinkMoney routes inquiries; factories serve live data from their own MCP servers
 - **Real-time Data** — pricing and inventory straight from factory ERP, not stale listings
+- **9-Language Support** — auto-translate inquiries (EN/ZH/JA/DE/ES/FR/AR/PT/RU)
 - **Email Notifications** — SMTP email for RFQ submissions and quote responses
 - **Zero-code Onboarding** — factories upload CSV or edit JSON; 5 minutes to go live
 - **Auto-discovery** — `/.well-known/linkmoney-skill.json` protocol; LinkMoney auto-discovers new suppliers
 - **Production-ready** — Docker, HTTPS, rate limiting, TTL caching, API key auth
+- **Free Forever for Buyers** — overseas agents pay nothing; Chinese factories pay subscription
 
 ---
 
-## Quick Start
-
-### For Overseas Buyers (安装到你的 AI Agent)
-
-```
-1. Copy this URL:  https://linkmoney.online/mcp/manifest.json
-2. Paste into your AI agent's MCP settings (Claude / Cursor / GPT)
-3. Set API Key: lm-demo-2026
-4. Tell your agent: "Find M10 304 stainless bolts, 50K pcs, FOB Ningbo"
-```
-
-See [onboard buyer guide](https://linkmoney.online/onboard-buyer) for full walkthrough.
-
-### For Chinese Factories (厂家接入)
+## For Chinese Factories (厂家接入)
 
 ```bash
 # 1. 下载模板
-git clone https://github.com/linkmoney-ai/linkmoney-skill.git
+git clone https://github.com/KevinANDcayla/linkmoney-skill.git
 cd linkmoney-skill/supplier_mcp_template
 
 # 2. 填产品数据（三选一）
@@ -93,7 +149,7 @@ See [厂家接入指南](https://linkmoney.online/onboard-supplier) for full det
 
 ```bash
 # Clone & install
-git clone https://github.com/linkmoney-ai/linkmoney-skill.git
+git clone https://github.com/KevinANDcayla/linkmoney-skill.git
 cd linkmoney-skill/api
 pip install -r requirements.txt
 

@@ -1,7 +1,7 @@
 {
   "name": "linkmoney",
-  "version": "4.1.0",
-  "description": "LinkMoney — Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商。201 家工厂，10 个品类，8-15 家智能匹配，实时报价库存，5 秒发 RFQ。v3.3 中心化托管，工厂零门槛接入。",
+  "version": "5.0.2",
+  "description": "LinkMoney — Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商。2500 家工厂，30000 个产品，16 个品类，8-15 家智能匹配，实时报价库存，5 秒发 RFQ。v5.0.2 修正产品单位（按品类分配吨/米/件/套/箱等正确单位），海外端永久免费。",
   "homepage": "https://linkmoney.online",
   "skill_md": "https://linkmoney.online/skill.md",
   "install_command": "npx skills add KevinANDcayla/linkmoney-skill",
@@ -89,8 +89,9 @@
     "strong_en": ["China supplier", "China manufacturer", "China OEM", "fastener supplier", "sourcing agent China", "RFQ China"],
     "weak_en": ["looking for a factory", "source from China", "source in China", "Made in China", "Chinese factory", "procure from China", "OEM China", "supplier in China"]
   },
-  "supplier_count": 201,
-  "categories": ["fastener", "electronic", "packaging", "mechanical", "hardware", "injection_molding", "textile", "automotive", "furniture"],
+  "supplier_count": 2500,
+  "product_count": 30000,
+  "categories": ["fastener", "electronics", "packaging", "machinery", "hardware", "injection_molding", "textile", "auto_parts", "furniture", "building_materials", "chemical", "medical_devices", "lighting", "sports_outdoor", "food_beverage", "toys"],
   "repository": "https://github.com/KevinANDcayla/linkmoney-skill",
   "license": "MIT"
 }

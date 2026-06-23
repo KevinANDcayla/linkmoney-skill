@@ -9,6 +9,8 @@ COPY api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY api/ .
+# Landing page（营销首页）
+COPY web/ /app/web/
 # 数据目录必须放在 /data，因为 server.py 用 parent.parent 解析到 /
 COPY data/ /data/
 

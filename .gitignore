@@ -2,15 +2,30 @@
 .env
 .env.local
 .env.*.local
+.secrets.local.md
 *.pem
 *.key
 *.crt
+.rsync_linkmoney.exp
+.ssh_linkmoney.exp
+.xiaping_memory.md
 
 # 数据库（运行时数据）
 data/linkmoney.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+data/*.bak.*
+data/exports/
+
+# 部署脚本（含 AK/SK）
+scripts/deploy_*.py
+scripts/open_ports*.py
+scripts/check_*.py
+scripts/fix_paths.py
+scripts/rebuild_db.py
+scripts/verify_*.py
+scripts/quick_test.py
 
 # 日志
 logs/*.log

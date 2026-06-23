@@ -1139,7 +1139,8 @@ app.add_middleware(SlowAPIMiddleware)
 # ===== 认证豁免路径 =====
 
 _AUTH_EXEMPT_PATHS = {
-    "/", "/health", "/mcp/manifest.json", "/docs", "/openapi.json", "/redoc",
+    "/", "/en", "/zh", "/health", "/track", "/stats/visits",
+    "/mcp/manifest.json", "/docs", "/openapi.json", "/redoc",
     "/onboard-supplier", "/onboard-buyer", "/beta-signup", "/beta-program",
     "/verify_email", "/trust_score/supplier",  # 公开端点：验证 + 信用查询
     "/skill.md", "/.well-known/ai-plugin.json", "/.well-known/linkmoney-skill.json",  # Skill 发现端点
@@ -1276,27 +1277,71 @@ WEB_DIR_CANDIDATES = [
     Path(__file__).parent.parent / "web",         # 双层目录（api/server.py）
 ]
 LANDING_HTML = None
+LANDING_EN_HTML = None
 for d in WEB_DIR_CANDIDATES:
-    p = d / "landing.html"
-    if p.exists():
-        LANDING_HTML = p
+    p_zh = d / "landing.html"
+    p_en = d / "landing_en.html"
+    if LANDING_HTML is None and p_zh.exists():
+        LANDING_HTML = p_zh
+    if LANDING_EN_HTML is None and p_en.exists():
+        LANDING_EN_HTML = p_en
+    if LANDING_HTML and LANDING_EN_HTML:
         break
 if LANDING_HTML is None:
     LANDING_HTML = WEB_DIR_CANDIDATES[0] / "landing.html"  # 兜底
+if LANDING_EN_HTML is None:
+    LANDING_EN_HTML = WEB_DIR_CANDIDATES[0] / "landing_en.html"  # 兜底
+
+
+def _detect_lang(accept_language: str) -> str:
+    """根据 Accept-Language 头判断语言：en 或 zh。默认 en（海外优先）。"""
+    if not accept_language:
+        return "en"
+    al = accept_language.lower()
+    # 中文优先级判断：zh-CN, zh-TW, zh
+    for part in al.split(","):
+        tag = part.split(";")[0].strip()
+        if tag.startswith("zh"):
+            return "zh"
+    # 默认英文（海外用户优先）
+    return "en"
 
 
 @app.get("/", response_class=HTMLResponse)
-def root():
+def root(request: Request):
     """
     根路由 → 营销 Landing Page
+    根据 Accept-Language 自动切换：中文 → 中文版，其他 → 英文版
     海外 Agent 调 API 请用 /mcp/manifest.json
     """
+    accept_lang = request.headers.get("accept-language", "")
+    lang = _detect_lang(accept_lang)
+    if lang == "zh" and LANDING_HTML.exists():
+        return FileResponse(LANDING_HTML)
+    if LANDING_EN_HTML.exists():
+        return FileResponse(LANDING_EN_HTML)
     if LANDING_HTML.exists():
         return FileResponse(LANDING_HTML)
     return HTMLResponse(
         "<h1>LinkMoney</h1><p>Landing page not found. See <a href='/mcp/manifest.json'>/mcp/manifest.json</a> for API.</p>",
         status_code=200,
     )
+
+
+@app.get("/en", response_class=HTMLResponse)
+def landing_en():
+    """英文版 Landing Page（强制英文）"""
+    if LANDING_EN_HTML.exists():
+        return FileResponse(LANDING_EN_HTML)
+    return HTMLResponse("<h1>LinkMoney</h1><p>English landing page not found.</p>", status_code=200)
+
+
+@app.get("/zh", response_class=HTMLResponse)
+def landing_zh():
+    """中文版 Landing Page（强制中文）"""
+    if LANDING_HTML.exists():
+        return FileResponse(LANDING_HTML)
+    return HTMLResponse("<h1>LinkMoney</h1><p>中文页面未找到。</p>", status_code=200)
 
 
 # ===== MCP 协议端点 =====
@@ -4784,6 +4829,50 @@ def leave_review(req: LeaveReviewRequest):
 
 
 # ===== v3.0 中间 Agent 维护层 =====
+
+@app.get("/health")
+def health_check():
+    """简单健康检查端点（供 Docker healthcheck / 外部监控使用）"""
+    return {"status": "ok", "service": "linkmoney-api", "version": "4.1.0"}
+
+
+# ===== 轻量访问统计 =====
+
+import threading as _threading
+from collections import defaultdict as _defaultdict
+
+_VISIT_STATS = _defaultdict(int)
+_VISIT_LOCK = _threading.Lock()
+_VISIT_START = time.time()
+
+
+@app.post("/track")
+async def track_visit(request: Request):
+    """轻量访问统计端点（无需第三方服务）"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    page = body.get("page", "unknown")
+    lang = body.get("lang", "unknown")
+    key = f"{page}:{lang}"
+    with _VISIT_LOCK:
+        _VISIT_STATS[key] += 1
+    return {"status": "ok"}
+
+
+@app.get("/stats/visits")
+def visit_stats():
+    """访问统计数据"""
+    with _VISIT_LOCK:
+        stats = dict(_VISIT_STATS)
+    uptime_hours = (time.time() - _VISIT_START) / 3600
+    return {
+        "uptime_hours": round(uptime_hours, 1),
+        "total_visits": sum(stats.values()),
+        "breakdown": stats,
+    }
+
 
 @app.get("/agent/status")
 def agent_status():

@@ -81,6 +81,10 @@
 
   .brand-symbol { font-size: 120px; text-align: center; color: var(--blue); opacity: 0.1; margin-bottom: -60px; font-weight: 900; user-select: none; }
 </style>
+<script>
+// 轻量访问统计（无需第三方服务）
+fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({page:'landing_zh', lang:'zh'})}).catch(()=>{});
+</script>
 </head>
 <body>
 
