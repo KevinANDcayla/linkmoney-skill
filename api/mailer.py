@@ -19,14 +19,62 @@ LinkMoney Mailer — SMTP 邮件发送模块
 """
 
 import os
+import json
 import logging
 import smtplib
+import sqlite3
 import threading
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger("linkmoney.mailer")
+
+# 数据库路径（与 server.py 一致）
+_DB_PATH = Path("/data/database.json").parent / "linkmoney.db"
+if not _DB_PATH.parent.exists():
+    _DB_PATH = Path(__file__).parent.parent.parent / "data" / "linkmoney.db"
+
+
+def _init_mail_logs_table():
+    """初始化 mail_logs 表（幂等）"""
+    try:
+        conn = sqlite3.connect(str(_DB_PATH))
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS mail_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                to_email TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                error_msg TEXT DEFAULT '',
+                mail_type TEXT DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_mail_logs_created ON mail_logs(created_at)")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"init mail_logs table failed: {e}")
+
+
+def _log_mail(to_email: str, subject: str, status: str, error_msg: str = "", mail_type: str = ""):
+    """记录邮件发送日志到数据库"""
+    try:
+        conn = sqlite3.connect(str(_DB_PATH))
+        conn.execute(
+            "INSERT INTO mail_logs(to_email, subject, status, error_msg, mail_type) VALUES(?, ?, ?, ?, ?)",
+            (to_email[:200], subject[:200], status, error_msg[:500], mail_type),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # 日志写入失败不影响邮件发送
+
+
+# 启动时初始化表
+_init_mail_logs_table()
 
 
 class Mailer:
@@ -43,14 +91,16 @@ class Mailer:
         # 邮件覆盖：前期所有 RFQ 通知统一发到这个地址
         self.override_email = os.getenv("LINKMONEY_RFQ_OVERRIDE_EMAIL", "").strip()
 
-    def _send(self, to_email: str, subject: str, html_body: str):
-        """实际发送邮件（同步）"""
+    def _send(self, to_email: str, subject: str, html_body: str, mail_type: str = ""):
+        """实际发送邮件（同步），并记录日志到 mail_logs 表"""
         if not self.enabled:
             logger.info(f"[MAIL DISABLED] To: {to_email} | Subject: {subject}")
+            _log_mail(to_email, subject, "disabled", "LINKMONEY_MAIL_ENABLED=false", mail_type)
             return False
 
         if not self.user or not self.password:
             logger.warning(f"[MAIL SKIP] SMTP 未配置用户名/密码，跳过发送 To: {to_email}")
+            _log_mail(to_email, subject, "skipped", "SMTP credentials not configured", mail_type)
             return False
 
         msg = MIMEMultipart("alternative")
@@ -67,14 +117,16 @@ class Mailer:
             server.sendmail(self.from_addr, [to_email], msg.as_string())
             server.quit()
             logger.info(f"[MAIL SENT] To: {to_email} | Subject: {subject}")
+            _log_mail(to_email, subject, "sent", "", mail_type)
             return True
         except Exception as e:
             logger.error(f"[MAIL FAIL] To: {to_email} | Error: {e}")
+            _log_mail(to_email, subject, "failed", str(e)[:500], mail_type)
             return False
 
-    def send_async(self, to_email: str, subject: str, html_body: str):
+    def send_async(self, to_email: str, subject: str, html_body: str, mail_type: str = ""):
         """异步发送邮件（后台线程，不阻塞请求）"""
-        thread = threading.Thread(target=self._send, args=(to_email, subject, html_body), daemon=True)
+        thread = threading.Thread(target=self._send, args=(to_email, subject, html_body, mail_type), daemon=True)
         thread.start()
 
     def _resolve_to(self, original_email: str, label: str = "") -> tuple:
@@ -178,7 +230,7 @@ class Mailer:
             </div>
         </div>
         """
-        self.send_async(to_email, subject, body)
+        self.send_async(to_email, subject, body, mail_type="notify_supplier_new_rfq")
 
     def notify_buyer_rfq_received(self, buyer: dict, supplier: dict, rfq: dict, matches: list):
         """通知海外采购方：RFQ 已收到 + 匹配到的中国工厂信息 + 预计 5 工作日回复"""
@@ -285,7 +337,7 @@ class Mailer:
             </div>
         </div>
         """
-        self.send_async(to_email, subject, body)
+        self.send_async(to_email, subject, body, mail_type="notify_buyer_rfq_received")
 
     def notify_buyer_quote_received(self, buyer: dict, supplier: dict, rfq: dict, quote: dict):
         """通知海外采购方：中国供应商已报价"""
@@ -350,7 +402,7 @@ class Mailer:
             </div>
         </div>
         """
-        self.send_async(to_email, subject, body)
+        self.send_async(to_email, subject, body, mail_type="notify_buyer_quote_received")
 
 
 # 全局单例

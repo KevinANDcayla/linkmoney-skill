@@ -48,8 +48,176 @@ AGENT_DESCRIPTION = (
 
 # ===== 健康检查 =====
 
-_HEALTH_TIMEOUT = 8  # 厂家 MCP 健康检查超时（秒）
-_HEALTH_CONCURRENCY = 8  # 并发检查数
+_HEALTH_TIMEOUT = 5  # 厂家 MCP 健康检查超时（秒）— 更严格限制
+_HEALTH_CONCURRENCY = 4  # 并发检查数（降低以减少外部请求压力）
+_HEALTH_MAX_RETRIES = 1  # 最大重试次数（失败即标记 degraded，不重试）
+
+# ===== 供应商端点熔断机制 =====
+
+# 熔断状态：endpoint -> {"failures": int, "tripped": bool, "tripped_at": float, "half_open": bool}
+_CIRCUIT_BREAKER: dict = {}
+_CB_FAILURE_THRESHOLD = 3  # 连续失败 3 次触发熔断
+_CB_RECOVERY_SECONDS = 300  # 熔断 5 分钟后进入半开状态
+_CB_LOCK = threading.Lock()
+
+
+def _is_circuit_tripped(endpoint: str) -> bool:
+    """检查端点是否被熔断"""
+    with _CB_LOCK:
+        state = _CIRCUIT_BREAKER.get(endpoint)
+        if not state:
+            return False
+        if not state["tripped"]:
+            return False
+        # 检查是否已过恢复时间
+        import time as _time
+        elapsed = _time.time() - state["tripped_at"]
+        if elapsed >= _CB_RECOVERY_SECONDS:
+            # 进入半开状态，允许一次试探请求
+            state["half_open"] = True
+            return False
+        return True
+
+
+def _record_circuit_failure(endpoint: str):
+    """记录端点验证失败"""
+    import time as _time
+    with _CB_LOCK:
+        state = _CIRCUIT_BREAKER.setdefault(endpoint, {"failures": 0, "tripped": False, "tripped_at": 0, "half_open": False})
+        state["failures"] += 1
+        if state["failures"] >= _CB_FAILURE_THRESHOLD and not state["tripped"]:
+            state["tripped"] = True
+            state["tripped_at"] = _time.time()
+            logger.warning(f"[CIRCUIT_BREAKER] Endpoint tripped: {endpoint} (failures={state['failures']})")
+
+
+def _record_circuit_success(endpoint: str):
+    """记录端点验证成功（重置熔断状态）"""
+    with _CB_LOCK:
+        if endpoint in _CIRCUIT_BREAKER:
+            del _CIRCUIT_BREAKER[endpoint]
+
+# ===== 供应商端点白名单机制 =====
+
+# 允许的供应商 MCP 端点域名后缀白名单
+# 仅 LinkMoney 托管端点和已审核的自部署端点可发起健康检查
+_SUPPLIER_ENDPOINT_WHITELIST = [
+    "linkmoney.online",       # LinkMoney 官方托管端点
+    "linkmoney.online:8765",  # 含端口
+    "localhost",              # 本地开发环境
+    "127.0.0.1",              # 本地开发环境
+]
+
+# 是否启用端点白名单严格模式（true=仅白名单内端点可检查，false=记录警告但仍检查）
+_ENDPOINT_STRICT_MODE = True
+
+
+def _is_endpoint_allowed(endpoint: str) -> bool:
+    """
+    检查供应商 MCP 端点是否在白名单内。
+
+    安全措施：
+    - 仅允许预审核的域名后缀
+    - 阻止未知外部域名的健康检查请求
+    - 严格模式下拒绝非白名单端点
+    """
+    if not endpoint:
+        return False
+
+    # 提取域名（去掉 https:// 和路径）
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(endpoint)
+        host = parsed.hostname or ""
+        port = parsed.port
+        # 构造 host:port 形式用于匹配
+        host_with_port = f"{host}:{port}" if port else host
+
+        # 检查白名单
+        for allowed in _SUPPLIER_ENDPOINT_WHITELIST:
+            if host == allowed or host_with_port == allowed:
+                return True
+            # 支持子域名匹配（如 mcp.supplier.linkmoney.online）
+            if host.endswith("." + allowed):
+                return True
+
+        if _ENDPOINT_STRICT_MODE:
+            logger.warning(f"Endpoint not in whitelist (strict mode): {endpoint}")
+            return False
+        else:
+            logger.warning(f"Endpoint not in whitelist (non-strict, allowing): {endpoint}")
+            return True
+    except Exception:
+        return False
+
+
+def _log_health_check(supplier_id: str, endpoint: str, status: str, latency: int, note: str = ""):
+    """
+    审计日志：记录所有对外部供应商端点的健康检查请求。
+
+    用于安全审计追踪，记录：
+    - 请求目标（supplier_id + endpoint）
+    - 请求结果（status + latency）
+    - 异常说明（note）
+    """
+    logger.info(
+        f"[HEALTH_CHECK_AUDIT] supplier={supplier_id} endpoint={endpoint} "
+        f"status={status} latency={latency}ms note={note}"
+    )
+
+
+# ===== manifest.json 安全验证 =====
+
+# 允许的字段白名单
+_MANIFEST_ALLOWED_FIELDS = {"name", "tools", "version", "description", "homepage", "api_key", "base_url", "endpoints"}
+# 单字段值最大长度（字节）
+_MANIFEST_MAX_FIELD_SIZE = 10 * 1024  # 10KB
+# 整个 manifest 最大长度（字节）
+_MANIFEST_MAX_TOTAL_SIZE = 100 * 1024  # 100KB
+# 允许的 JSON 值类型
+_MANIFEST_ALLOWED_TYPES = (str, int, float, bool, list, dict, type(None))
+
+
+def _validate_manifest(data: Any, depth: int = 0, max_depth: int = 3) -> bool:
+    """
+    严格验证从外部供应商 MCP 端点获取的 manifest.json 数据。
+
+    安全措施：
+    - 字段白名单：仅允许预定义字段，拒绝未知字段
+    - 深度限制：解析深度 ≤ 3 层，防止嵌套注入
+    - 长度限制：单字段 ≤ 10KB，总响应 ≤ 100KB
+    - 类型白名单：仅允许基本 JSON 类型，拒绝函数字符串
+    """
+    if depth > max_depth:
+        return False
+
+    if not isinstance(data, _MANIFEST_ALLOWED_TYPES):
+        return False
+
+    if isinstance(data, str):
+        return len(data.encode("utf-8")) <= _MANIFEST_MAX_FIELD_SIZE
+
+    if isinstance(data, dict):
+        # 检查字段白名单（仅顶层 dict 检查字段名）
+        if depth == 0:
+            for key in data:
+                if key not in _MANIFEST_ALLOWED_FIELDS:
+                    return False
+        # 递归检查值
+        for key, val in data.items():
+            if not _validate_manifest(val, depth + 1, max_depth):
+                return False
+        return True
+
+    if isinstance(data, list):
+        if len(data) > 100:  # 列表长度限制
+            return False
+        for item in data:
+            if not _validate_manifest(item, depth + 1, max_depth):
+                return False
+        return True
+
+    return True
 
 
 async def _check_one_supplier(sess: requests.Session, supplier: dict) -> dict:
@@ -69,20 +237,93 @@ async def _check_one_supplier(sess: requests.Session, supplier: dict) -> dict:
             "note": "未安装 LinkMoney Skill，无 endpoint",
         }
 
+    # 安全检查：端点白名单验证
+    if not _is_endpoint_allowed(endpoint):
+        _log_health_check(sid, endpoint, "blocked", 0, "endpoint not in whitelist")
+        return {
+            "supplier_id": sid,
+            "name": name,
+            "endpoint": endpoint,
+            "status": "blocked",
+            "latency_ms": 0,
+            "checked_at": datetime.now().isoformat(timespec="seconds"),
+            "note": "端点未通过白名单审核，健康检查被阻止",
+        }
+
+    # 熔断检查：如果端点已被熔断，跳过健康检查
+    if _is_circuit_tripped(endpoint):
+        _log_health_check(sid, endpoint, "circuit_open", 0, "circuit breaker tripped")
+        return {
+            "supplier_id": sid,
+            "name": name,
+            "endpoint": endpoint,
+            "status": "circuit_open",
+            "latency_ms": 0,
+            "checked_at": datetime.now().isoformat(timespec="seconds"),
+            "note": "端点熔断中（连续验证失败），5 分钟内跳过健康检查",
+        }
+
     url = urljoin(endpoint.rstrip("/") + "/", "manifest.json")
     t0 = time.time()
     try:
         r = sess.get(url, timeout=_HEALTH_TIMEOUT)
         latency = int((time.time() - t0) * 1000)
-        if r.status_code == 200 and "tools" in (r.json() if r.headers.get("content-type", "").startswith("application/json") else {}):
-            return {
-                "supplier_id": sid,
-                "name": name,
-                "endpoint": endpoint,
-                "status": "online",
-                "latency_ms": latency,
-                "checked_at": datetime.now().isoformat(timespec="seconds"),
-            }
+        if r.status_code == 200:
+            # 检查响应大小限制
+            content_length = len(r.content)
+            if content_length > _MANIFEST_MAX_TOTAL_SIZE:
+                _log_health_check(sid, endpoint, "degraded", latency, f"manifest too large: {content_length} bytes")
+                return {
+                    "supplier_id": sid,
+                    "name": name,
+                    "endpoint": endpoint,
+                    "status": "degraded",
+                    "latency_ms": latency,
+                    "checked_at": datetime.now().isoformat(timespec="seconds"),
+                    "note": f"manifest.json 超过大小限制 ({content_length} > {_MANIFEST_MAX_TOTAL_SIZE} bytes)",
+                }
+            # 解析 JSON 并严格验证
+            try:
+                manifest_data = r.json()
+            except Exception:
+                _log_health_check(sid, endpoint, "degraded", latency, "JSON parse failed")
+                _record_circuit_failure(endpoint)
+                return {
+                    "supplier_id": sid,
+                    "name": name,
+                    "endpoint": endpoint,
+                    "status": "degraded",
+                    "latency_ms": latency,
+                    "checked_at": datetime.now().isoformat(timespec="seconds"),
+                    "note": "manifest.json JSON 解析失败",
+                }
+
+            # 安全验证：字段白名单 + 深度限制 + 类型检查
+            if not _validate_manifest(manifest_data):
+                _log_health_check(sid, endpoint, "degraded", latency, "manifest validation failed")
+                _record_circuit_failure(endpoint)
+                return {
+                    "supplier_id": sid,
+                    "name": name,
+                    "endpoint": endpoint,
+                    "status": "degraded",
+                    "latency_ms": latency,
+                    "checked_at": datetime.now().isoformat(timespec="seconds"),
+                    "note": "manifest.json 安全验证失败（字段/深度/类型不合规）",
+                }
+
+            if "tools" in manifest_data:
+                _log_health_check(sid, endpoint, "online", latency, "OK")
+                _record_circuit_success(endpoint)
+                return {
+                    "supplier_id": sid,
+                    "name": name,
+                    "endpoint": endpoint,
+                    "status": "online",
+                    "latency_ms": latency,
+                    "checked_at": datetime.now().isoformat(timespec="seconds"),
+                }
+        _log_health_check(sid, endpoint, "degraded", latency, f"HTTP {r.status_code}")
         return {
             "supplier_id": sid,
             "name": name,
@@ -93,6 +334,8 @@ async def _check_one_supplier(sess: requests.Session, supplier: dict) -> dict:
             "http_status": r.status_code,
         }
     except requests.exceptions.Timeout:
+        _log_health_check(sid, endpoint, "offline", int((time.time() - t0) * 1000), "timeout")
+        _record_circuit_failure(endpoint)
         return {
             "supplier_id": sid,
             "name": name,
@@ -103,6 +346,8 @@ async def _check_one_supplier(sess: requests.Session, supplier: dict) -> dict:
             "note": "timeout",
         }
     except Exception as e:  # noqa: BLE001
+        _log_health_check(sid, endpoint, "offline", int((time.time() - t0) * 1000), f"error: {str(e)[:100]}")
+        _record_circuit_failure(endpoint)
         return {
             "supplier_id": sid,
             "name": name,

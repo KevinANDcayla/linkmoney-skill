@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LinkMoney 监控看板</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0A0E27; color: #e5e7eb; min-height: 100vh;
+  }
+  /* 顶部导航 */
+  .navbar {
+    background: linear-gradient(135deg, #0A0E27, #1a1f4a);
+    border-bottom: 1px solid #2a2f5a; padding: 16px 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .navbar h1 { font-size: 20px; color: #fff; display: flex; align-items: center; gap: 8px; }
+  .navbar h1 .logo { color: #60A5FA; }
+  .nav-right { display: flex; align-items: center; gap: 16px; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .status-dot.online { background: #10B981; box-shadow: 0 0 8px #10B981; }
+  .status-dot.offline { background: #EF4444; box-shadow: 0 0 8px #EF4444; }
+  .refresh-btn {
+    background: #60A5FA; color: #fff; border: none; padding: 8px 16px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; transition: background 0.2s;
+  }
+  .refresh-btn:hover { background: #3b82f6; }
+  .auto-refresh { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #9ca3af; }
+  .auto-refresh input { cursor: pointer; }
+  .last-update { font-size: 12px; color: #6b7280; }
+
+  /* 主容器 */
+  .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+  /* 卡片 */
+  .card {
+    background: #1a1f4a; border-radius: 12px; padding: 20px;
+    border: 1px solid #2a2f5a; margin-bottom: 20px;
+  }
+  .card-title {
+    font-size: 14px; color: #9ca3af; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 16px; display: flex;
+    align-items: center; justify-content: space-between;
+  }
+  .card-title .badge {
+    background: #2a2f5a; color: #60A5FA; padding: 2px 8px;
+    border-radius: 4px; font-size: 11px;
+  }
+
+  /* 统计卡片网格 */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px; margin-bottom: 24px;
+  }
+  .stat-card {
+    background: #1a1f4a; border-radius: 12px; padding: 20px;
+    border: 1px solid #2a2f5a; transition: transform 0.2s;
+  }
+  .stat-card:hover { transform: translateY(-2px); }
+  .stat-label { font-size: 12px; color: #9ca3af; margin-bottom: 8px; }
+  .stat-value { font-size: 28px; font-weight: 700; color: #fff; }
+  .stat-value.green { color: #10B981; }
+  .stat-value.blue { color: #60A5FA; }
+  .stat-value.orange { color: #F59E0B; }
+  .stat-value.red { color: #EF4444; }
+  .stat-sub { font-size: 11px; color: #6b7280; margin-top: 4px; }
+
+  /* 两列布局 */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* 表格 */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 10px 12px; color: #9ca3af; border-bottom: 1px solid #2a2f5a; font-weight: 500; }
+  td { padding: 10px 12px; border-bottom: 1px solid #1e234a; color: #d1d5db; }
+  tr:hover td { background: #1e234a; }
+
+  /* 状态标签 */
+  .tag { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+  .tag.green { background: rgba(16,185,129,0.15); color: #10B981; }
+  .tag.blue { background: rgba(96,165,250,0.15); color: #60A5FA; }
+  .tag.orange { background: rgba(245,158,11,0.15); color: #F59E0B; }
+  .tag.red { background: rgba(239,68,68,0.15); color: #EF4444; }
+  .tag.gray { background: rgba(156,163,175,0.15); color: #9ca3af; }
+
+  /* 进度条 */
+  .progress-bar { background: #2a2f5a; border-radius: 4px; height: 6px; overflow: hidden; margin-top: 8px; }
+  .progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+  .progress-fill.green { background: #10B981; }
+  .progress-fill.blue { background: #60A5FA; }
+  .progress-fill.orange { background: #F59E0B; }
+  .progress-fill.red { background: #EF4444; }
+
+  /* API 调用图表 */
+  .chart-container { height: 200px; display: flex; align-items: flex-end; gap: 3px; padding: 10px 0; }
+  .chart-bar { flex: 1; min-width: 8px; background: #60A5FA; border-radius: 3px 3px 0 0; transition: height 0.3s; position: relative; cursor: pointer; min-height: 2px; }
+  .chart-bar:hover { background: #3b82f6; }
+  .chart-bar.error { background: #EF4444; }
+  .chart-bar:hover::after {
+    content: attr(data-label); position: absolute; bottom: 100%;
+    left: 50%; transform: translateX(-50%); background: #000; color: #fff;
+    padding: 4px 8px; border-radius: 4px; font-size: 11px; white-space: nowrap;
+    z-index: 10;
+  }
+
+  /* 加载状态 */
+  .loading { text-align: center; padding: 40px; color: #6b7280; }
+  .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid #2a2f5a; border-top-color: #60A5FA; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* 登录遮罩 */
+  .login-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: #0A0E27; display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+  }
+  .login-box {
+    background: #1a1f4a; padding: 40px; border-radius: 12px;
+    border: 1px solid #2a2f5a; width: 360px;
+  }
+  .login-box h2 { color: #fff; margin-bottom: 8px; text-align: center; }
+  .login-box p { color: #9ca3af; font-size: 13px; text-align: center; margin-bottom: 24px; }
+  .login-box input {
+    width: 100%; padding: 12px; background: #0A0E27; border: 1px solid #2a2f5a;
+    border-radius: 6px; color: #fff; font-size: 14px; margin-bottom: 16px;
+  }
+  .login-box input:focus { outline: none; border-color: #60A5FA; }
+  .login-box button {
+    width: 100%; padding: 12px; background: #60A5FA; color: #fff; border: none;
+    border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;
+  }
+  .login-box button:hover { background: #3b82f6; }
+  .login-error { color: #EF4444; font-size: 12px; text-align: center; margin-top: 8px; display: none; }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0A0E27; }
+  ::-webkit-scrollbar-thumb { background: #2a2f5a; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3f6a; }
+
+  /* 邮件配置提示 */
+  .alert {
+    background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3);
+    border-radius: 8px; padding: 12px 16px; margin-bottom: 20px;
+    display: flex; align-items: center; gap: 10px; font-size: 13px; color: #F59E0B;
+  }
+  .alert.error { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); color: #EF4444; }
+  .alert.success { background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.3); color: #10B981; }
+</style>
+</head>
+<body>
+
+<!-- 登录遮罩 -->
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <h2>🔗 LinkMoney 监控看板</h2>
+    <p>请输入 API Key 登录</p>
+    <input type="password" id="apiKeyInput" placeholder="lm-prod-2026-key1" autofocus>
+    <button onclick="doLogin()">登录</button>
+    <div class="login-error" id="loginError">API Key 无效，请重试</div>
+  </div>
+</div>
+
+<!-- 顶部导航 -->
+<div class="navbar">
+  <h1><span class="logo">🔗</span> LinkMoney 监控看板</h1>
+  <div class="nav-right">
+    <span class="status-dot" id="statusDot"></span>
+    <span style="font-size:13px;color:#9ca3af" id="statusText">连接中...</span>
+    <label class="auto-refresh">
+      <input type="checkbox" id="autoRefresh" checked> 自动刷新
+    </label>
+    <button class="refresh-btn" onclick="loadAll()">🔄 刷新</button>
+    <span class="last-update" id="lastUpdate">--</span>
+  </div>
+</div>
+
+<!-- 主容器 -->
+<div class="container" id="mainContent" style="display:none">
+
+  <!-- 邮件配置警告 -->
+  <div class="alert" id="mailAlert" style="display:none">
+    ⚠️ <span id="mailAlertText"></span>
+  </div>
+
+  <!-- 第一行：系统概览 -->
+  <div class="stats-grid" id="systemStats">
+    <div class="stat-card">
+      <div class="stat-label">服务状态</div>
+      <div class="stat-value green" id="svcStatus">--</div>
+      <div class="stat-sub" id="svcUptime">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">供应商总数</div>
+      <div class="stat-value blue" id="totalSuppliers">--</div>
+      <div class="stat-sub" id="suppliersWithSkill">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">海外买家</div>
+      <div class="stat-value blue" id="totalBuyers">--</div>
+      <div class="stat-sub" id="buyersWithLinkmoney">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">RFQ 询盘</div>
+      <div class="stat-value orange" id="totalRfqs">--</div>
+      <div class="stat-sub" id="todayRfqs">--</div>
+    </div>
+  </div>
+
+  <!-- 第二行：API 调用统计 -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">今日 API 调用</div>
+      <div class="stat-value blue" id="todayApiCalls">--</div>
+      <div class="stat-sub" id="apiCallsSub">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">错误率 (4xx/5xx)</div>
+      <div class="stat-value" id="errorRate">--</div>
+      <div class="progress-bar"><div class="progress-fill red" id="errorBar" style="width:0%"></div></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">平均响应时间</div>
+      <div class="stat-value green" id="avgLatency">--</div>
+      <div class="stat-sub" id="p99Latency">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">邮件发送 (今日)</div>
+      <div class="stat-value orange" id="todayMails">--</div>
+      <div class="stat-sub" id="mailSub">--</div>
+    </div>
+  </div>
+
+  <!-- 第三行：24小时 API 调用趋势 + Top 端点 -->
+  <div class="two-col">
+    <div class="card">
+      <div class="card-title">
+        <span>📊 24 小时 API 调用趋势</span>
+        <span class="badge" id="chartTotal">--</span>
+      </div>
+      <div class="chart-container" id="apiChart">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">
+        <span>🏆 Top 10 端点</span>
+        <span class="badge">今日</span>
+      </div>
+      <div id="topEndpoints"><div class="loading"><div class="spinner"></div></div></div>
+    </div>
+  </div>
+
+  <!-- 第四行：最近 RFQ + 最近报价 -->
+  <div class="two-col">
+    <div class="card">
+      <div class="card-title">
+        <span>📋 最近 RFQ 询盘</span>
+        <span class="badge" id="rfqCount">--</span>
+      </div>
+      <div id="recentRfqs"><div class="loading"><div class="spinner"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">
+        <span>💰 最近报价</span>
+        <span class="badge" id="quoteCount">--</span>
+      </div>
+      <div id="recentQuotes"><div class="loading"><div class="spinner"></div></div></div>
+    </div>
+  </div>
+
+  <!-- 第五行：最近 API 日志 + 邮件日志 -->
+  <div class="two-col">
+    <div class="card">
+      <div class="card-title">
+        <span>📜 最近 API 调用日志</span>
+        <span class="badge">实时</span>
+      </div>
+      <div style="max-height:400px;overflow-y:auto" id="apiLogs">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">
+        <span>📧 邮件发送日志</span>
+        <span class="badge" id="mailLogCount">--</span>
+      </div>
+      <div style="max-height:400px;overflow-y:auto" id="mailLogs">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 第六行：供应商分类 + LLM 状态 -->
+  <div class="two-col">
+    <div class="card">
+      <div class="card-title"><span>🏭 供应商分类分布</span></div>
+      <div id="categoryDist"><div class="loading"><div class="spinner"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span>🤖 LLM 与系统配置</span></div>
+      <div id="llmStatus"><div class="loading"><div class="spinner"></div></div></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ===== 全局变量 =====
+let API_KEY = localStorage.getItem('lm_dashboard_key') || '';
+let BASE_URL = window.location.origin;
+let refreshTimer = null;
+
+// ===== 登录 =====
+function doLogin() {
+  const key = document.getElementById('apiKeyInput').value.trim();
+  if (!key) return;
+  API_KEY = key;
+  // 测试 key 是否有效
+  fetch(`${BASE_URL}/stats`, { headers: { 'X-API-Key': key } })
+    .then(r => {
+      if (!r.ok) throw new Error('invalid');
+      return r.json();
+    })
+    .then(() => {
+      localStorage.setItem('lm_dashboard_key', key);
+      document.getElementById('loginOverlay').style.display = 'none';
+      document.getElementById('mainContent').style.display = 'block';
+      loadAll();
+      startAutoRefresh();
+    })
+    .catch(() => {
+      document.getElementById('loginError').style.display = 'block';
+    });
+}
+
+// 回车登录
+document.getElementById('apiKeyInput').addEventListener('keypress', e => {
+  if (e.key === 'Enter') doLogin();
+});
+
+// 自动刷新
+function startAutoRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  const cb = document.getElementById('autoRefresh');
+  if (cb.checked) {
+    refreshTimer = setInterval(loadAll, 30000); // 30 秒
+  }
+}
+document.getElementById('autoRefresh').addEventListener('change', startAutoRefresh);
+
+// ===== API 调用封装 =====
+async function apiGet(path) {
+  const r = await fetch(`${BASE_URL}${path}`, { headers: { 'X-API-Key': API_KEY } });
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  return r.json();
+}
+
+// ===== 加载所有数据 =====
+async function loadAll() {
+  try {
+    await Promise.all([
+      loadOverview(),
+      loadApiLogs(),
+      loadRecentRfqs(),
+      loadMailLogs(),
+    ]);
+    document.getElementById('statusDot').className = 'status-dot online';
+    document.getElementById('statusText').textContent = '在线';
+    document.getElementById('lastUpdate').textContent = `更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
+  } catch (e) {
+    document.getElementById('statusDot').className = 'status-dot offline';
+    document.getElementById('statusText').textContent = '离线';
+    console.error('loadAll error:', e);
+  }
+}
+
+// ===== 系统概览 =====
+async function loadOverview() {
+  const data = await apiGet('/admin/overview');
+
+  // 系统状态
+  document.getElementById('svcStatus').textContent = data.system.healthy ? '在线' : '异常';
+  document.getElementById('svcStatus').className = 'stat-value ' + (data.system.healthy ? 'green' : 'red');
+  document.getElementById('svcUptime').textContent = `启动于 ${data.system.started_at || '--'}`;
+
+  // 业务数据
+  document.getElementById('totalSuppliers').textContent = data.business.total_suppliers.toLocaleString();
+  document.getElementById('suppliersWithSkill').textContent = `${data.business.suppliers_with_skill} 已装 Skill`;
+  document.getElementById('totalBuyers').textContent = data.business.total_buyers.toLocaleString();
+  document.getElementById('buyersWithLinkmoney').textContent = `${data.business.buyers_with_linkmoney} 已装 LinkMoney`;
+  document.getElementById('totalRfqs').textContent = data.business.total_rfqs.toLocaleString();
+  document.getElementById('todayRfqs').textContent = `今日 ${data.business.today_rfqs} 条`;
+
+  // API 统计
+  document.getElementById('todayApiCalls').textContent = data.api.today_calls.toLocaleString();
+  document.getElementById('apiCallsSub').textContent = `总计 ${data.api.total_calls.toLocaleString()} | ${data.api.unique_ips} IP`;
+  const errRate = data.api.today_calls > 0 ? (data.api.today_errors / data.api.today_calls * 100) : 0;
+  const errEl = document.getElementById('errorRate');
+  errEl.textContent = errRate.toFixed(1) + '%';
+  errEl.className = 'stat-value ' + (errRate < 5 ? 'green' : errRate < 15 ? 'orange' : 'red');
+  document.getElementById('errorBar').style.width = Math.min(errRate, 100) + '%';
+  document.getElementById('avgLatency').textContent = data.api.avg_latency_ms.toFixed(0) + 'ms';
+  document.getElementById('p99Latency').textContent = `P99: ${data.api.p99_latency_ms.toFixed(0)}ms`;
+
+  // 邮件统计
+  document.getElementById('todayMails').textContent = data.mail.today_count;
+  document.getElementById('mailSub').textContent = `成功 ${data.mail.today_sent} | 失败 ${data.mail.today_failed}`;
+
+  // 邮件配置警告
+  if (!data.mail.enabled) {
+    document.getElementById('mailAlert').style.display = 'flex';
+    document.getElementById('mailAlertText').textContent = '邮件发送未启用（LINKMONEY_MAIL_ENABLED=false）。RFQ 提交后不会发送邮件通知。请在 ECS 配置 SMTP 环境变量后重启容器。';
+  } else if (!data.mail.smtp_configured) {
+    document.getElementById('mailAlert').style.display = 'flex';
+    document.getElementById('mailAlertText').textContent = 'SMTP 凭证未配置（LINKMONEY_SMTP_USER/PASSWORD 为空）。邮件无法发送。';
+  } else {
+    document.getElementById('mailAlert').style.display = 'none';
+  }
+
+  // 24 小时趋势图
+  renderApiChart(data.api.hourly_calls);
+
+  // Top 端点
+  renderTopEndpoints(data.api.top_endpoints);
+
+  // 供应商分类
+  renderCategoryDist(data.business.category_dist);
+
+  // LLM 状态
+  renderLlmStatus(data.llm, data.system);
+}
+
+// ===== 24小时 API 调用趋势图 =====
+function renderApiChart(hourlyData) {
+  const container = document.getElementById('apiChart');
+  if (!hourlyData || hourlyData.length === 0) {
+    container.innerHTML = '<div class="loading">暂无数据</div>';
+    return;
+  }
+  const maxVal = Math.max(...hourlyData.map(h => h.count), 1);
+  const now = new Date();
+  const currentHour = now.getHours();
+
+  container.innerHTML = hourlyData.map(h => {
+    const heightPct = (h.count / maxVal) * 100;
+    const isError = h.errors > 0;
+    const label = `${h.hour}:00 | 调用 ${h.count} | 错误 ${h.errors}`;
+    return `<div class="chart-bar ${isError ? 'error' : ''}" style="height:${Math.max(heightPct, 2)}%" data-label="${label}"></div>`;
+  }).join('');
+
+  const total = hourlyData.reduce((s, h) => s + h.count, 0);
+  document.getElementById('chartTotal').textContent = `${total} 次`;
+}
+
+// ===== Top 端点 =====
+function renderTopEndpoints(endpoints) {
+  const container = document.getElementById('topEndpoints');
+  if (!endpoints || endpoints.length === 0) {
+    container.innerHTML = '<div class="loading">暂无数据</div>';
+    return;
+  }
+  const maxCount = endpoints[0].count;
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>端点</th><th style="width:60px">调用</th><th style="width:80px">平均耗时</th><th style="width:120px">占比</th></tr></thead>
+      <tbody>
+        ${endpoints.map(e => `
+          <tr>
+            <td><code style="color:#60A5FA;font-size:12px">${e.endpoint}</code></td>
+            <td>${e.count}</td>
+            <td>${e.avg_ms.toFixed(0)}ms</td>
+            <td>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div class="progress-bar" style="flex:1;margin:0">
+                  <div class="progress-fill blue" style="width:${(e.count/maxCount*100)}%"></div>
+                </div>
+                <span style="font-size:11px;color:#9ca3af;width:35px;text-align:right">${(e.count/maxCount*100).toFixed(0)}%</span>
+              </div>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ===== 供应商分类分布 =====
+function renderCategoryDist(dist) {
+  const container = document.getElementById('categoryDist');
+  if (!dist || dist.length === 0) {
+    container.innerHTML = '<div class="loading">暂无数据</div>';
+    return;
+  }
+  const maxCount = dist[0].count;
+  const categoryNames = {
+    fastener: '紧固件', electronics: '电子', packaging: '包装', hardware: '五金',
+    injection_molding: '注塑', machinery: '机械', textile: '纺织', other: '其他'
+  };
+  container.innerHTML = dist.map(d => `
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:13px">${categoryNames[d.category] || d.category}</span>
+        <span style="font-size:13px;color:#60A5FA">${d.count}</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill blue" style="width:${(d.count/maxCount*100)}%"></div></div>
+    </div>
+  `).join('');
+}
+
+// ===== LLM 与系统配置状态 =====
+function renderLlmStatus(llm, system) {
+  const container = document.getElementById('llmStatus');
+  const items = [
+    { label: 'LLM 引擎', value: llm.provider, status: llm.enabled ? 'green' : 'red' },
+    { label: 'LLM 状态', value: llm.enabled ? '已启用' : '已禁用', status: llm.enabled ? 'green' : 'gray' },
+    { label: 'ARK API Key', value: llm.api_key_configured ? '已配置' : '未配置', status: llm.api_key_configured ? 'green' : 'orange' },
+    { label: '文本模型', value: llm.text_model, status: 'blue' },
+    { label: '视觉模型', value: llm.vision_model, status: 'blue' },
+    { label: '邮件发送', value: llm.mail_enabled ? '已启用' : '已禁用', status: llm.mail_enabled ? 'green' : 'red' },
+    { label: 'SMTP 配置', value: llm.smtp_configured ? '已配置' : '未配置', status: llm.smtp_configured ? 'green' : 'orange' },
+    { label: '邮件覆盖', value: llm.override_email || '未设置', status: llm.override_email ? 'blue' : 'gray' },
+    { label: 'Worker 进程数', value: system.workers + '', status: 'blue' },
+    { label: '数据库版本', value: system.db_version, status: 'blue' },
+  ];
+  container.innerHTML = `
+    <table>
+      <tbody>
+        ${items.map(i => `
+          <tr>
+            <td style="color:#9ca3af;width:140px">${i.label}</td>
+            <td><span class="tag ${i.status}">${i.value}</span></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ===== 最近 API 日志 =====
+async function loadApiLogs() {
+  const data = await apiGet('/admin/api_logs?limit=30');
+  const container = document.getElementById('apiLogs');
+  if (!data.logs || data.logs.length === 0) {
+    container.innerHTML = '<div class="loading">暂无日志</div>';
+    return;
+  }
+  container.innerHTML = `
+    <table>
+      <thead><tr>
+        <th style="width:60px">时间</th><th style="width:40px">方法</th><th>端点</th>
+        <th style="width:50px">状态</th><th style="width:60px">耗时</th><th style="width:80px">IP</th>
+      </tr></thead>
+      <tbody>
+        ${data.logs.map(l => `
+          <tr>
+            <td style="font-size:11px;color:#6b7280">${l.time}</td>
+            <td><span class="tag gray" style="font-size:10px">${l.method}</span></td>
+            <td style="font-size:12px"><code style="color:#60A5FA">${l.endpoint}</code></td>
+            <td><span class="tag ${l.status_code < 400 ? 'green' : l.status_code < 500 ? 'orange' : 'red'}">${l.status_code}</span></td>
+            <td style="font-size:12px">${l.duration_ms.toFixed(0)}ms</td>
+            <td style="font-size:11px;color:#6b7280">${l.ip}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ===== 最近 RFQ =====
+async function loadRecentRfqs() {
+  const data = await apiGet('/admin/recent_rfqs?limit=10');
+  const container = document.getElementById('recentRfqs');
+  document.getElementById('rfqCount').textContent = data.total + ' 总计';
+
+  if (!data.rfqs || data.rfqs.length === 0) {
+    container.innerHTML = '<div class="loading">暂无 RFQ</div>';
+    return;
+  }
+
+  const statusMap = {
+    pending: { tag: 'orange', label: '待报价' },
+    quoted: { tag: 'blue', label: '已报价' },
+    accepted: { tag: 'green', label: '已接受' },
+    closed: { tag: 'gray', label: '已关闭' },
+  };
+
+  container.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>RFQ ID</th><th>产品</th><th>数量</th><th>状态</th><th style="width:60px">时间</th>
+      </tr></thead>
+      <tbody>
+        ${data.rfqs.map(r => {
+          const s = statusMap[r.status] || { tag: 'gray', label: r.status };
+          return `
+            <tr>
+              <td><code style="color:#60A5FA;font-size:11px">${r.id}</code></td>
+              <td style="font-size:12px">${r.sku}</td>
+              <td style="font-size:12px">${r.quantity.toLocaleString()}</td>
+              <td><span class="tag ${s.tag}">${s.label}</span></td>
+              <td style="font-size:11px;color:#6b7280">${r.time}</td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  // 最近报价
+  const quotesContainer = document.getElementById('recentQuotes');
+  if (!data.quotes || data.quotes.length === 0) {
+    quotesContainer.innerHTML = '<div class="loading">暂无报价</div>';
+    document.getElementById('quoteCount').textContent = '0';
+  } else {
+    document.getElementById('quoteCount').textContent = data.quotes.length + ' 最近';
+    quotesContainer.innerHTML = `
+      <table>
+        <thead><tr>
+          <th>RFQ</th><th>供应商</th><th>单价</th><th>总价</th><th>状态</th><th style="width:60px">时间</th>
+        </tr></thead>
+        <tbody>
+          ${data.quotes.map(q => `
+            <tr>
+              <td><code style="color:#60A5FA;font-size:11px">${q.rfq_id}</code></td>
+              <td style="font-size:12px">${q.supplier_name}</td>
+              <td style="font-size:12px;color:#10B981">$${q.unit_price}</td>
+              <td style="font-size:12px;color:#10B981">$${q.total_price}</td>
+              <td><span class="tag blue">${q.status}</span></td>
+              <td style="font-size:11px;color:#6b7280">${q.time}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+}
+
+// ===== 邮件日志 =====
+async function loadMailLogs() {
+  const data = await apiGet('/admin/mail_logs?limit=20');
+  const container = document.getElementById('mailLogs');
+  document.getElementById('mailLogCount').textContent = data.total + ' 总计';
+
+  if (!data.logs || data.logs.length === 0) {
+    container.innerHTML = '<div class="loading">暂无邮件日志</div>';
+    return;
+  }
+
+  container.innerHTML = `
+    <table>
+      <thead><tr>
+        <th style="width:60px">时间</th><th>收件人</th><th>主题</th><th style="width:60px">状态</th>
+      </tr></thead>
+      <tbody>
+        ${data.logs.map(l => `
+          <tr>
+            <td style="font-size:11px;color:#6b7280">${l.time}</td>
+            <td style="font-size:12px">${l.to_email}</td>
+            <td style="font-size:12px;color:#d1d5db">${l.subject}</td>
+            <td><span class="tag ${l.status === 'sent' ? 'green' : l.status === 'failed' ? 'red' : 'gray'}">${l.status}</span></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ===== 启动 =====
+if (API_KEY) {
+  // 已有 key，直接尝试加载
+  fetch(`${BASE_URL}/stats`, { headers: { 'X-API-Key': API_KEY } })
+    .then(r => {
+      if (!r.ok) throw new Error('invalid');
+      document.getElementById('loginOverlay').style.display = 'none';
+      document.getElementById('mainContent').style.display = 'block';
+      loadAll();
+      startAutoRefresh();
+    })
+    .catch(() => {
+      localStorage.removeItem('lm_dashboard_key');
+      API_KEY = '';
+    });
+}
+</script>
+</body>
+</html>

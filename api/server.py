@@ -31,7 +31,7 @@ from middle_agent import (
     middle_agent_alerts, middle_agent_maintenance, middle_agent_optimize,
     middle_agent_maintain, bootstrap_agent,
 )
-from llm_layer import get_llm, DeepSeekError  # DeepSeek V4 Flash/Pro
+from llm_layer import get_llm, DeepSeekError  # 火山引擎豆包 (Ark API)
 
 # ===== 工具函数 =====
 _PINYIN_INITIAL = {
@@ -680,8 +680,10 @@ def init_db(force: bool = False):
                     year_established, employees, annual_revenue_usd, export_ratio, main_markets,
                     moq, lead_time_standard, lead_time_express, certifications, languages,
                     agent_skill_installed, skill_mcp_endpoint, skill_platforms, skill_installs,
-                    created_at, updated_at, contact_person, email, phone, wechat, language_contact
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, contact_person, email, phone, wechat, language_contact,
+                    email_verified, phone_verified, license_verified, trust_score, trust_level,
+                    review_count, review_avg, gold_badge, data_source_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 s["id"],
                 s["name_zh"],
@@ -708,10 +710,19 @@ def init_db(force: bool = False):
                 now_iso,
                 now_iso,
                 s.get("contact_person", ""),
-                s.get("email", ""),
-                s.get("phone", ""),
+                s.get("email", s.get("contact_email", "")),
+                s.get("phone", s.get("contact_phone", "")),
                 s.get("wechat", ""),
                 json.dumps(s.get("language_contact", {}), ensure_ascii=False),
+                1 if s.get("email_verified") else 0,
+                1 if s.get("phone_verified") else 0,
+                1 if s.get("license_verified") else 0,
+                s.get("trust_score", 0),
+                s.get("trust_level", "unverified"),
+                s.get("review_count", 0),
+                s.get("review_avg", 0),
+                1 if s.get("gold_badge") else 0,
+                s.get("data_source_type", "hosted"),
             ))
 
             # 导入 products（v3.2: 支持完整字段，对齐 Alibaba/1688/schema.org）
@@ -1148,6 +1159,7 @@ _AUTH_EXEMPT_PATHS = {
     # v3.0 中间 Agent：作为平台维护者，对内默认开启（可在生产环境收紧）
     "/agent/status", "/agent/health", "/agent/routing",
     "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain",
+    "/admin/dashboard",  # v5.1.0 监控看板页面（HTML 公开，数据接口仍需 API Key）
 }
 
 
@@ -1444,73 +1456,28 @@ def linkmoney_skill_json():
 @app.get("/mcp/manifest.json")
 def mcp_manifest():
     """
-    MCP 协议清单（分层 v4.0.0）— Agent 自动发现 tool
-    =================================================
-    `tools` 字段只列海外 Agent 实际可调的 13 个 public tool（直接 list 调用）。
-    其他 28 个通过 `platform.breakdown` 透明披露：
-      - public (13)      : 海外 Agent 实际调用（你看到的 tools 字段就是这 13 个）
-      - chinese (6)      : 中方 Agent 用（evaluate_sme / register_supplier / get_my_rfqs
-                           / send_quote / bid_on_requirement / outreach_buyer）
-      - internal (7)     : LinkMoney 平台运维 Agent（agent/* 维护层）
-      - marketplace (15) : Agent Marketplace v4.0（RFQ/报价/阶段/公正记录）
+    MCP 协议清单 — 从 mcp_manifest.json 文件读取，确保与 GitHub 仓库一致
     """
-    return {
-        "name": "linkmoney",
-        "version": "4.0.0",
-        "description": "LinkMoney — Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商。51 家工厂，10 个品类，8-15 家智能匹配，实时报价库存，5 秒发 RFQ。",
-        "tools": [
-            # ===== Public tools（海外 Agent 实际调用） =====
-            {"name": "find_china_supplier", "description": "海外采购方找中国供应商（v4.0 7 维加权评分，返回 8-15 家，混合架构：缓存 + 厂家 MCP 直连）", "endpoint": "/find_china_supplier"},
-            {"name": "get_pricing", "description": "查供应商阶梯报价（MOQ + 数量档位）", "endpoint": "/get_pricing"},
-            {"name": "get_inventory", "description": "查供应商实时库存（直连厂家 MCP）", "endpoint": "/get_inventory"},
-            {"name": "match_spec", "description": "规格匹配（按品类+规格+认证筛选）", "endpoint": "/match_spec"},
-            {"name": "download_cert", "description": "下载供应商认证（ISO/CE/FDA 等）", "endpoint": "/download_cert"},
-            {"name": "multi_lang_inquiry", "description": "多语言自动询盘生成（中/英/西/阿/法/俄/日/韩等）", "endpoint": "/multi_lang_inquiry"},
-            {"name": "submit_rfq", "description": "提交 RFQ（含规格 + 数量 + 交付要求）", "endpoint": "/submit_rfq"},
-            {"name": "get_supplier_contact", "description": "查看供应商完整联系方式（已装 Skill 可见）", "endpoint": "/get_supplier_contact"},
-            {"name": "post_requirement", "description": "海外采购方发布公开需求（需求广场）", "endpoint": "/post_requirement"},
-            {"name": "browse_requirements", "description": "浏览公开需求广场", "endpoint": "/browse_requirements"},
-            {"name": "leave_review", "description": "交易完成后买卖双方互评（v3.0，5 维度）", "endpoint": "/leave_review"},
-            {"name": "trust_score", "description": "查询供应商/采购方信任评分与等级", "endpoint": "/trust_score"},
-            {"name": "stats", "description": "查询全局统计数据（含缓存命中率）", "endpoint": "/stats"},
-        ],
-        "platform": {
-            "tools_total": 41,
-            "breakdown": {
-                "public": 13,     # 海外 Agent 实际能调（= 上方 tools 数组长度）
-                "chinese": 6,     # 中方 Agent 内部用
-                "internal": 7,    # 平台运维 Agent
-                "marketplace": 15, # v4.0 Agent Marketplace 新增
-            },
-            "chinese_tools": [
-                {"name": "evaluate_sme", "endpoint": "/evaluate_sme", "purpose": "5 维评估中国制造业 AI 出海 Agent 化水平"},
-                {"name": "register_supplier", "endpoint": "/register_supplier", "purpose": "中方工厂注册入驻"},
-                {"name": "get_my_rfqs", "endpoint": "/get_my_rfqs", "purpose": "工厂查询自己收到的 RFQ 询盘"},
-                {"name": "send_quote", "endpoint": "/send_quote", "purpose": "供应商对 RFQ 报价并邮件通知采购方"},
-                {"name": "bid_on_requirement", "endpoint": "/bid_on_requirement", "purpose": "供应商对公开需求报价"},
-                {"name": "outreach_buyer", "endpoint": "/outreach_buyer", "purpose": "供应商主动外联采购方（信任分≥60）"},
+    import json as _json
+    import os as _os
+    manifest_path = _os.path.join(_os.path.dirname(__file__), "mcp_manifest.json")
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        # fallback to minimal manifest
+        return {
+            "name": "linkmoney",
+            "version": "5.0.3",
+            "description": "LinkMoney — B2B Trade Connector for AI Agents. 2500 factories, 30000 products, 16 categories. API Key: lm-demo-2026",
+            "api_key": "lm-demo-2026",
+            "api_key_header": "X-API-Key",
+            "base_url": "https://linkmoney.online",
+            "tools": [
+                {"name": "find_china_supplier", "description": "Find Chinese manufacturers. REQUIRED when user asks to find suppliers/factories. Returns 8-15 ranked suppliers. Params: category (required), spec, quantity, target_price", "endpoint": "GET /find_china_supplier"},
             ],
-            "internal_tools": [
-                {"name": "agent_status", "endpoint": "/agent/status", "purpose": "[中间 Agent] 状态 + 健康度概览"},
-                {"name": "agent_health", "endpoint": "/agent/health", "purpose": "[中间 Agent] 厂家 MCP 健康检查报告"},
-                {"name": "agent_routing", "endpoint": "/agent/routing", "purpose": "[中间 Agent] RFQ 路由推荐"},
-                {"name": "agent_alerts", "endpoint": "/agent/alerts", "purpose": "[中间 Agent] 告警列表"},
-                {"name": "agent_maintenance", "endpoint": "/agent/maintenance", "purpose": "[中间 Agent] 维护日志"},
-                {"name": "agent_optimize", "endpoint": "/agent/optimize", "purpose": "[中间 Agent] 自我优化分析报告"},
-                {"name": "agent_maintain", "endpoint": "/agent/maintain", "purpose": "[中间 Agent] 手动触发维护任务"},
-            ],
-        },
-        "middle_agent": {
-            "id": "linkmoney-middle-agent",
-            "version": "3.0.0",
-            "name_zh": "LinkMoney 中间 Agent",
-            "description": "双边 Skill 之间的中维护者：监控厂家 MCP 健康、决定 RFQ 路由、发现异常告警、基于历史指标自我优化。",
-            "endpoints": ["/agent/status", "/agent/health", "/agent/routing",
-                          "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain"],
-        },
-        "homepage": "https://linkmoney.online",
-        "repository": "https://github.com/KevinANDcayla/linkmoney-skill",
-    }
+            "homepage": "https://linkmoney.online",
+        }
 
 
 # ===== C 端（中国制造业老板侧）Tools =====
@@ -1635,10 +1602,11 @@ def find_china_supplier(
     spec: str = Query("", description="规格描述"),
     quantity: int = Query(0, description="采购数量"),
     target_price: str = Query("", description="目标价格（如 0.15 USD）"),
+    port: str = Query("", description="指定 FOB 港口（如 Ningbo/Shanghai/Shenzhen），优先返回该港口附近供应商"),
 ):
     """
     海外采购方找中国供应商（混合架构，v4.0 多维加权评分）
-    输入：品类 + 规格 + 数量 + 目标价
+    输入：品类 + 规格 + 数量 + 目标价 + 港口（可选）
     输出：8-15 家工厂比价 + 推荐方案（评分 ≥ 60 的全部返回）
     已装 Skill 的厂家返回 mcp_endpoint，Agent 应直连厂家 MCP 获取实时报价/库存
 
@@ -1647,9 +1615,10 @@ def find_china_supplier(
     - 动态返回 8-15 家（≥60 分全部返回，最少 5 家兜底）
     - quantity/target_price 参与匹配
     - 修复缓存写入死代码
+    - v5.0.5: 支持 port 参数，港口匹配加分；spec 匹配优先产品名
     """
-    # 缓存检查（缓存 key 包含 target_price）
-    cache_key = f"find:{category}:{spec}:{quantity}:{target_price}"
+    # 缓存检查（缓存 key 包含 target_price + port）
+    cache_key = f"find:{category}:{spec}:{quantity}:{target_price}:{port}"
     cached = _supplier_cache.get(cache_key)
     if cached:
         return cached
@@ -1711,17 +1680,29 @@ def find_china_supplier(
         dim_category = 30
         score += dim_category
 
-        # 2. spec 匹配 20%（分词匹配，非子串）
+        # 2. spec 匹配 20%（优先匹配产品名，其次 SKU/材质）
         matching_product = None
         if spec_keywords:
+            # 第一轮：优先匹配产品名（name_en / name_zh）
+            best_hit_count = 0
             for p in s.get("products", []):
-                product_text = f"{p.get('name_en', '')} {p.get('name_zh', '')} {p.get('sku', '')} {p.get('material', '')} {p.get('grade', '')}".lower()
-                hit_count = sum(1 for kw in spec_keywords if kw in product_text)
-                if hit_count > 0:
+                name_text = f"{p.get('name_en', '')} {p.get('name_zh', '')}".lower()
+                name_hit = sum(1 for kw in spec_keywords if kw in name_text)
+                if name_hit > best_hit_count:
+                    best_hit_count = name_hit
                     matching_product = p
-                    dim_spec = min(20, int(20 * hit_count / len(spec_keywords)))
-                    score += dim_spec
-                    break
+            # 第二轮：如果产品名没命中，再匹配 SKU/材质/等级
+            if not matching_product:
+                for p in s.get("products", []):
+                    product_text = f"{p.get('sku', '')} {p.get('material', '')} {p.get('grade', '')}".lower()
+                    hit_count = sum(1 for kw in spec_keywords if kw in product_text)
+                    if hit_count > 0:
+                        matching_product = p
+                        best_hit_count = hit_count
+                        break
+            if matching_product and best_hit_count > 0:
+                dim_spec = min(20, int(20 * best_hit_count / len(spec_keywords)))
+                score += dim_spec
         else:
             # 无 spec 输入，给基础分
             dim_spec = 10
@@ -1780,9 +1761,17 @@ def find_china_supplier(
         dim_certs = min(10, cert_count * 2)  # 每张认证 +2，最多 10
         score += dim_certs
 
-        # 6. 地理位置 5%（港口匹配加分）
+        # 6. 地理位置 5%（港口匹配加分 — 支持用户指定 port 参数）
         supplier_port = s.get("location", {}).get("port", "")
-        if supplier_port and supplier_port.lower() in _MAJOR_PORTS:
+        if port and supplier_port:
+            # 用户指定了港口，精确匹配加分
+            if supplier_port.lower() == port.lower():
+                dim_location = 5  # 精确匹配满分
+            elif supplier_port.lower() in _MAJOR_PORTS:
+                dim_location = 3  # 主要港口部分分
+            else:
+                dim_location = 1  # 其他港口
+        elif supplier_port and supplier_port.lower() in _MAJOR_PORTS:
             dim_location = 5  # 主要出口港口加分
         else:
             dim_location = 2  # 其他港口给基础分
@@ -2120,14 +2109,27 @@ def download_cert(supplier_id: str, cert_type: str):
 
     supplier = _row_to_supplier(row)
 
-    cert = next((c for c in supplier.get("certifications", []) if c["type"].upper() == cert_type.upper()), None)
+    cert = next((c for c in supplier.get("certifications", []) if (c["type"] if isinstance(c, dict) else c).upper() == cert_type.upper()), None)
     if not cert:
         return {
             "available": False,
             "supplier_id": supplier_id,
             "requested_cert": cert_type,
             "message": f"Certification {cert_type} not found for {supplier['name_zh']}",
-            "available_certs": [c["type"] for c in supplier.get("certifications", [])],
+            "available_certs": [c["type"] if isinstance(c, dict) else c for c in supplier.get("certifications", [])],
+        }
+
+    # 兼容 certifications 为字符串列表的情况
+    if isinstance(cert, str):
+        return {
+            "available": True,
+            "supplier_id": supplier_id,
+            "supplier_name": supplier.get("name_en") or supplier["name_zh"],
+            "cert_type": cert,
+            "valid_until": "unknown",
+            "is_valid": True,
+            "download_url": "",
+            "note": "Certification type recorded but no document file available",
         }
 
     return {
@@ -2160,7 +2162,7 @@ async def multi_lang_inquiry(req: InquiryRequest):
 
     输出:
         translations: {lang: {language, inquiry}} 字典
-        llm_provider: DeepSeek V4 Flash
+        llm_provider: 火山引擎豆包 (Ark API)
         key_terms: 提取的关键术语（避免翻译时丢失）
     """
     import asyncio as _asyncio
@@ -2210,7 +2212,7 @@ async def multi_lang_inquiry(req: InquiryRequest):
             try:
                 translated = await _asyncio.to_thread(llm.translate, src_text, src_lang, lang)
             except DeepSeekError as e:
-                logger.warning(f"DeepSeek translate failed ({src_lang}→{lang}): {e}")
+                logger.warning(f"Ark translate failed ({src_lang}→{lang}): {e}")
                 translated = None
             if translated is None:
                 translated = f"[{lang_names[lang]} | 翻译未配置] {src_text}"
@@ -2243,7 +2245,7 @@ async def multi_lang_inquiry(req: InquiryRequest):
                 try:
                     translated = llm.translate(src_text, src_lang, lang)
                 except DeepSeekError as e:
-                    logger.warning(f"DeepSeek translate failed ({src_lang}→{lang}): {e}")
+                    logger.warning(f"Ark translate failed ({src_lang}→{lang}): {e}")
 
             if translated is None:
                 translated = f"[{lang_names[lang]} | 翻译未配置] {src_text}"
@@ -2260,34 +2262,87 @@ async def multi_lang_inquiry(req: InquiryRequest):
         "translations": translations,
         "key_terms": key_terms,
         "total_languages": len(translations),
-        "llm_provider": "DeepSeek V4 Flash" if llm_available else "fallback (no API key)",
+        "llm_provider": "火山引擎豆包 (Ark API)" if llm_available else "fallback (no API key)",
         "llm_available": llm_available,
         "note": "双向单次翻译：buyer→zh 给工厂主，factory→buyer lang 给买家。Data 不出境。" if mode == "bilingual_single" else "8 国语言并发（兼容旧 API）",
     }
+
+
+class SubmitRFQRequest(BaseModel):
+    supplier_id: str
+    buyer_id: str = "buyer-demo"
+    sku: str = ""
+    quantity: int = 0
+    target_price_usd: float = 0
+    port: str = "Ningbo"
+    incoterms: str = "FOB"
+    delivery_deadline: str = ""
+    contact_email: str = ""
+    raw_message: str = ""
+    product_sku: str = ""  # 别名，兼容 Agent 传入
+    delivery_port: str = ""  # 别名，兼容 Agent 传入
+    notes: str = ""
 
 
 @app.post("/submit_rfq")
 @limiter.limit("10/minute")
 def submit_rfq(
     request: Request,
-    supplier_id: str,
-    buyer_id: str,
-    sku: str,
-    quantity: int,
+    supplier_id: str = "",
+    buyer_id: str = "buyer-demo",
+    sku: str = "",
+    quantity: int = 0,
     target_price_usd: float = 0,
     port: str = "Ningbo",
     incoterms: str = "FOB",
     delivery_deadline: str = "",
     contact_email: str = "",
     raw_message: str = "",         # v3.0+ — 买家原始自然语言需求（可选，触发 LLM parse_rfq）
+    body: SubmitRFQRequest = None,  # JSON body 支持
+    confirm_data_sharing: bool = False,  # v5.1.1 — 二次确认数据共享
+    anonymize_contact: bool = False,     # v5.1.1 — 匿名化联系方式
 ):
     """
-    提交 RFQ（v3.0+ — DeepSeek V4 Flash 智能解析）
+    提交 RFQ（v5.1.1 — 火山引擎豆包智能解析 + 二次确认 + 匿名化）
+
+    支持两种调用方式：
+    1. Query params: POST /submit_rfq?supplier_id=xxx&sku=xxx&quantity=50000&confirm_data_sharing=true
+    2. JSON body: POST /submit_rfq  {"supplier_id": "xxx", "product_sku": "xxx", "quantity": 50000, "delivery_port": "Ningbo"}
+
+    安全要求（v5.1.1）：
+    - confirm_data_sharing=true 必传，否则返回 400 错误
+    - anonymize_contact=true 时，供应商邮件中买家联系方式替换为 LinkMoney 中转邮箱
 
     - raw_message 可选：买家原始自然语言 RFQ（"我要 50K M8 螺栓，要快，FOB 洛杉矶..."）
     - 如果传了 raw_message，LLM 自动 parse 提取 category/spec/urgency 等
     - 解析结果存入 rfqs 表，方便后续做 RFQ 智能路由
     """
+    # v5.1.1 安全检查：二次确认数据共享
+    if not confirm_data_sharing:
+        raise HTTPException(
+            status_code=400,
+            detail="数据共享未确认：提交 RFQ 会将询价信息发送给指定供应商，请传入 confirm_data_sharing=true 确认您知晓此数据流向"
+        )
+
+    # 如果有 JSON body，优先使用 body 中的值（兼容 query params）
+    if body is not None:
+        supplier_id = body.supplier_id or supplier_id
+        buyer_id = body.buyer_id if body.buyer_id != "buyer-demo" else buyer_id
+        sku = body.sku or body.product_sku or sku
+        quantity = body.quantity or quantity
+        target_price_usd = body.target_price_usd or target_price_usd
+        port = body.port or body.delivery_port or port
+        incoterms = body.incoterms or incoterms
+        delivery_deadline = body.delivery_deadline or delivery_deadline
+        contact_email = body.contact_email or contact_email
+        raw_message = body.raw_message or body.notes or raw_message
+
+    if not supplier_id:
+        raise HTTPException(status_code=400, detail="supplier_id is required")
+    if not sku:
+        raise HTTPException(status_code=400, detail="sku (or product_sku) is required")
+    if quantity <= 0:
+        raise HTTPException(status_code=400, detail="quantity must be > 0")
     with get_db() as conn:
         s_row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
         b_row = conn.execute("SELECT * FROM overseas_buyers WHERE id = ?", (buyer_id,)).fetchone()
@@ -2358,7 +2413,7 @@ def submit_rfq(
                     parsed_rfq = llm.parse_rfq(raw_message, lang="auto")
                     logger.info(f"RFQ {rfq_id} parsed: {parsed_rfq.get('category')}/{parsed_rfq.get('urgency')}")
             except DeepSeekError as e:
-                logger.warning(f"parse_rfq failed for {rfq_id}: {e}")
+                logger.warning(f"Ark parse_rfq failed for {rfq_id}: {e}")
                 parsed_rfq = None
 
         # 用 LLM 解析结果覆盖默认（如有）
@@ -2405,7 +2460,15 @@ def submit_rfq(
                 if llm.is_available():
                     raw_message_zh = llm.translate(raw_message, "en", "zh") or ""
             except DeepSeekError as e:
-                logger.warning(f"translate raw_message for supplier email failed: {e}")
+                logger.warning(f"Ark translate raw_message for supplier email failed: {e}")
+
+        # v5.1.1 — 匿名化联系方式：供应商邮件中买家联系方式替换为 LinkMoney 中转邮箱
+        supplier_visible_email = contact_email
+        anonymized_note = ""
+        if anonymize_contact and contact_email:
+            supplier_visible_email = "relay@linkmoney.online"
+            anonymized_note = "（买家已启用联系方式匿名化，请通过 relay@linkmoney.online 中转回复）"
+            logger.info(f"RFQ {rfq_id}: anonymize_contact=true, supplier email relay enabled")
 
         mailer.notify_supplier_new_rfq(
             supplier=supplier,
@@ -2414,9 +2477,10 @@ def submit_rfq(
                 "id": rfq_id, "sku": sku, "quantity": quantity,
                 "target_price_usd": target_price_usd, "port": port,
                 "incoterms": incoterms, "delivery_deadline": delivery_deadline,
-                "contact_email": contact_email,
+                "contact_email": supplier_visible_email,
                 "raw_message": raw_message,
                 "raw_message_zh": raw_message_zh,
+                "anonymized_note": anonymized_note,
             },
             product_name=sku,
         )
@@ -2475,12 +2539,327 @@ def submit_rfq(
         "status": "submitted",
         "supplier_name": supplier["name_zh"],
         "buyer_company": buyer["company"] if buyer else buyer_id,
+        "contact_anonymized": anonymize_contact,
         "estimated_response_time": "5 个工作日",
         "next_step": "中国供应商已收到 RFQ 邮件通知，预计 5 个工作日内回复正式报价。海外买家也已收到匹配工厂列表邮件。可调用 get_my_rfqs 查询进度。",
     }
 
 
 # ===== 统计端点 =====
+
+# ===== v5.1.0 监控看板 =====
+
+DASHBOARD_HTML = None
+for _d in WEB_DIR_CANDIDATES:
+    _p = _d / "dashboard.html"
+    if _p.exists():
+        DASHBOARD_HTML = _p
+        break
+if DASHBOARD_HTML is None and WEB_DIR_CANDIDATES:
+    DASHBOARD_HTML = WEB_DIR_CANDIDATES[-1] / "dashboard.html"  # 兜底
+
+
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+def admin_dashboard():
+    """监控看板页面（HTML 公开访问，数据接口需 API Key）"""
+    if DASHBOARD_HTML and DASHBOARD_HTML.exists():
+        return FileResponse(DASHBOARD_HTML)
+    return HTMLResponse("<h1>dashboard.html not found</h1>", status_code=404)
+
+
+@app.get("/admin/overview")
+def admin_overview():
+    """看板聚合数据：系统状态 + 业务数据 + API 统计 + 邮件统计 + LLM 状态"""
+    import os as _os
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    with get_db() as conn:
+        # === 业务数据 ===
+        total_suppliers = conn.execute("SELECT COUNT(*) as cnt FROM suppliers").fetchone()["cnt"]
+        suppliers_with_skill = conn.execute(
+            "SELECT COUNT(*) as cnt FROM suppliers WHERE agent_skill_installed = 1"
+        ).fetchone()["cnt"]
+        total_buyers = conn.execute("SELECT COUNT(*) as cnt FROM overseas_buyers").fetchone()["cnt"]
+        buyers_with_linkmoney = conn.execute(
+            "SELECT COUNT(*) as cnt FROM overseas_buyers WHERE agent_installed_linkmoney = 1"
+        ).fetchone()["cnt"]
+        total_rfqs = conn.execute("SELECT COUNT(*) as cnt FROM rfqs").fetchone()["cnt"]
+        today_rfqs = conn.execute(
+            "SELECT COUNT(*) as cnt FROM rfqs WHERE created_at >= ?", (today_str,)
+        ).fetchone()["cnt"]
+
+        # 供应商分类分布
+        category_dist = [
+            dict(r) for r in conn.execute("""
+                SELECT category, COUNT(*) as count FROM suppliers
+                WHERE category IS NOT NULL AND category != ''
+                GROUP BY category ORDER BY count DESC LIMIT 10
+            """).fetchall()
+        ]
+
+        # === API 调用统计 ===
+        # 今日调用数
+        today_api_calls = conn.execute(
+            "SELECT COUNT(*) as cnt FROM api_logs WHERE created_at >= ?", (today_str,)
+        ).fetchone()["cnt"]
+        # 总调用数
+        total_api_calls = conn.execute("SELECT COUNT(*) as cnt FROM api_logs").fetchone()["cnt"]
+        # 今日错误数
+        today_errors = conn.execute(
+            "SELECT COUNT(*) as cnt FROM api_logs WHERE created_at >= ? AND status_code >= 400",
+            (today_str,)
+        ).fetchone()["cnt"]
+        # 独立 IP 数
+        unique_ips = conn.execute(
+            "SELECT COUNT(DISTINCT ip) as cnt FROM api_logs WHERE created_at >= ?", (today_str,)
+        ).fetchone()["cnt"]
+        # 平均响应时间
+        avg_latency = conn.execute(
+            "SELECT AVG(duration_ms) as avg FROM api_logs WHERE created_at >= ?", (today_str,)
+        ).fetchone()["avg"] or 0
+        # P99 响应时间
+        p99_latency = conn.execute(
+            "SELECT MAX(duration_ms) as p99 FROM api_logs WHERE created_at >= ?", (today_str,)
+        ).fetchone()["p99"] or 0
+
+        # 24 小时趋势（按小时聚合）
+        hourly_calls = [
+            dict(r) for r in conn.execute("""
+                SELECT
+                    strftime('%H', created_at) as hour,
+                    COUNT(*) as count,
+                    SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) as errors
+                FROM api_logs
+                WHERE created_at >= datetime('now', '-24 hours')
+                GROUP BY strftime('%H', created_at)
+                ORDER BY hour
+            """).fetchall()
+        ]
+
+        # Top 10 端点
+        top_endpoints = [
+            dict(r) for r in conn.execute("""
+                SELECT endpoint, COUNT(*) as count, AVG(duration_ms) as avg_ms
+                FROM api_logs
+                WHERE created_at >= ?
+                GROUP BY endpoint
+                ORDER BY count DESC LIMIT 10
+            """, (today_str,)).fetchall()
+        ]
+
+        # === 邮件统计 ===
+        try:
+            today_mail_count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM mail_logs WHERE created_at >= ?", (today_str,)
+            ).fetchone()["cnt"]
+            today_mail_sent = conn.execute(
+                "SELECT COUNT(*) as cnt FROM mail_logs WHERE created_at >= ? AND status = 'sent'",
+                (today_str,)
+            ).fetchone()["cnt"]
+            today_mail_failed = conn.execute(
+                "SELECT COUNT(*) as cnt FROM mail_logs WHERE created_at >= ? AND status = 'failed'",
+                (today_str,)
+            ).fetchone()["cnt"]
+        except Exception:
+            today_mail_count = today_mail_sent = today_mail_failed = 0
+
+        # === 数据库版本 ===
+        db_version_row = conn.execute(
+            "SELECT value FROM config WHERE key = 'json_version'"
+        ).fetchone()
+        db_version = db_version_row["value"] if db_version_row else "unknown"
+
+    # === 系统状态 ===
+    import subprocess
+    try:
+        # 容器启动时间
+        uptime_result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", "1"], capture_output=True, text=True, timeout=3
+        )
+        started_at = uptime_result.stdout.strip() if uptime_result.returncode == 0 else "unknown"
+    except Exception:
+        started_at = "unknown"
+
+    # Worker 数
+    workers = int(_os.getenv("WEB_CONCURRENCY", "2"))
+
+    # === LLM 状态 ===
+    from llm_layer import is_llm_enabled, get_llm
+    llm_enabled = is_llm_enabled()
+    llm_provider_name = "火山引擎豆包 (Ark API)" if llm_enabled else "fallback (disabled)"
+    ark_key_configured = bool(_os.getenv("ARK_API_KEY", ""))
+    text_model = _os.getenv("ARK_TEXT_MODEL", "doubao-pro-32k")
+    vision_model = _os.getenv("ARK_VISION_MODEL", "doubao-vision-pro-32k")
+
+    # === 邮件配置状态 ===
+    mail_enabled = _os.getenv("LINKMONEY_MAIL_ENABLED", "false").lower() == "true"
+    smtp_user = _os.getenv("LINKMONEY_SMTP_USER", "")
+    smtp_configured = bool(smtp_user and _os.getenv("LINKMONEY_SMTP_PASSWORD", ""))
+    override_email = _os.getenv("LINKMONEY_RFQ_OVERRIDE_EMAIL", "")
+
+    return {
+        "system": {
+            "healthy": True,
+            "started_at": started_at,
+            "workers": workers,
+            "db_version": db_version,
+        },
+        "business": {
+            "total_suppliers": total_suppliers,
+            "suppliers_with_skill": suppliers_with_skill,
+            "total_buyers": total_buyers,
+            "buyers_with_linkmoney": buyers_with_linkmoney,
+            "total_rfqs": total_rfqs,
+            "today_rfqs": today_rfqs,
+            "category_dist": category_dist,
+        },
+        "api": {
+            "today_calls": today_api_calls,
+            "total_calls": total_api_calls,
+            "today_errors": today_errors,
+            "unique_ips": unique_ips,
+            "avg_latency_ms": avg_latency,
+            "p99_latency_ms": p99_latency,
+            "hourly_calls": hourly_calls,
+            "top_endpoints": top_endpoints,
+        },
+        "mail": {
+            "enabled": mail_enabled,
+            "smtp_configured": smtp_configured,
+            "today_count": today_mail_count,
+            "today_sent": today_mail_sent,
+            "today_failed": today_mail_failed,
+        },
+        "llm": {
+            "enabled": llm_enabled,
+            "provider": llm_provider_name,
+            "api_key_configured": ark_key_configured,
+            "text_model": text_model,
+            "vision_model": vision_model,
+            "mail_enabled": mail_enabled,
+            "smtp_configured": smtp_configured,
+            "override_email": override_email,
+        },
+    }
+
+
+@app.get("/admin/api_logs")
+def admin_api_logs(limit: int = 30):
+    """最近 API 调用日志"""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT endpoint, method, status_code, duration_ms, ip, created_at
+            FROM api_logs
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (min(limit, 100),)).fetchall()
+
+    logs = []
+    for r in rows:
+        ca = r["created_at"]
+        # 提取时间部分
+        time_str = ca.split(" ")[1] if " " in ca else ca
+        logs.append({
+            "endpoint": r["endpoint"],
+            "method": r["method"],
+            "status_code": r["status_code"],
+            "duration_ms": r["duration_ms"],
+            "ip": r["ip"],
+            "time": time_str,
+        })
+
+    return {"logs": logs, "count": len(logs)}
+
+
+@app.get("/admin/recent_rfqs")
+def admin_recent_rfqs(limit: int = 10):
+    """最近 RFQ 询盘 + 报价"""
+    with get_db() as conn:
+        total = conn.execute("SELECT COUNT(*) as cnt FROM rfqs").fetchone()["cnt"]
+
+        rfq_rows = conn.execute("""
+            SELECT id, sku, quantity, status, created_at, target_price_usd
+            FROM rfqs
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (min(limit, 50),)).fetchall()
+
+        rfqs = []
+        for r in rfq_rows:
+            ca = r["created_at"]
+            time_str = ca.split(" ")[1] if " " in ca else ca
+            rfqs.append({
+                "id": r["id"],
+                "sku": r["sku"],
+                "quantity": r["quantity"],
+                "status": r["status"],
+                "target_price": r["target_price_usd"],
+                "time": time_str,
+            })
+
+        # 最近报价（从 bids 表）
+        quotes = []
+        try:
+            bid_rows = conn.execute("""
+                SELECT b.rfq_id, b.unit_price_usd, b.total_price_usd, b.status, b.created_at,
+                       s.name_zh as supplier_name
+                FROM bids b
+                LEFT JOIN suppliers s ON s.id = b.supplier_id
+                ORDER BY b.created_at DESC
+                LIMIT ?
+            """, (min(limit, 20),)).fetchall()
+
+            for r in bid_rows:
+                ca = r["created_at"]
+                time_str = ca.split(" ")[1] if " " in ca else ca
+                quotes.append({
+                    "rfq_id": r["rfq_id"],
+                    "supplier_name": r["supplier_name"] or "Unknown",
+                    "unit_price": r["unit_price_usd"],
+                    "total_price": r["total_price_usd"],
+                    "status": r["status"],
+                    "time": time_str,
+                })
+        except Exception:
+            pass  # bids 表可能不存在或字段不同
+
+    return {"rfqs": rfqs, "quotes": quotes, "total": total}
+
+
+@app.get("/admin/mail_logs")
+def admin_mail_logs(limit: int = 20):
+    """邮件发送日志"""
+    with get_db() as conn:
+        try:
+            total = conn.execute("SELECT COUNT(*) as cnt FROM mail_logs").fetchone()["cnt"]
+            rows = conn.execute("""
+                SELECT to_email, subject, status, error_msg, mail_type, created_at
+                FROM mail_logs
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (min(limit, 100),)).fetchall()
+        except Exception:
+            return {"logs": [], "total": 0}
+
+    logs = []
+    for r in rows:
+        ca = r["created_at"]
+        time_str = ca.split(" ")[1] if " " in ca else ca
+        logs.append({
+            "to_email": r["to_email"],
+            "subject": r["subject"],
+            "status": r["status"],
+            "error_msg": r["error_msg"],
+            "mail_type": r["mail_type"],
+            "time": time_str,
+        })
+
+    return {"logs": logs, "total": total}
+
 
 @app.get("/stats")
 def get_stats():
@@ -2631,7 +3010,7 @@ def get_supplier_contact(
         "name_en": s["name_en"],
         "location": s["location"],
         "category": s["category"],
-        "certifications": [c["type"] for c in s.get("certifications", [])],
+        "certifications": [c["type"] if isinstance(c, dict) else c for c in s.get("certifications", [])],
         "contact_available": has_skill,
         "contact": {
             "person": s.get("contact_person", ""),
@@ -4511,6 +4890,12 @@ def get_trust_score(target_type: str, target_id: str):
             }
         else:
             raise HTTPException(status_code=400, detail="Only supplier trust score supported currently")
+
+
+@app.get("/trust_score/{supplier_id}")
+def get_trust_score_short(supplier_id: str):
+    """trust_score 快捷路由 — 自动识别为 supplier"""
+    return get_trust_score("supplier", supplier_id)
 
 
 # ===== v2.2 需求广场 =====
