@@ -414,7 +414,10 @@ def run_health_check() -> dict:
 
 
 def _check_one_supplier_sync(sess: requests.Session, supplier: dict) -> dict:
-    """同步版本健康检查（避免 asyncio 引入额外复杂度）。"""
+    """同步版本健康检查（避免 asyncio 引入额外复杂度）。
+
+    v5.2: 补齐白名单 + 熔断 + manifest 校验（之前异步版有但同步版缺失）。
+    """
     endpoint = supplier.get("skill_mcp_endpoint", "").strip()
     sid = supplier["id"]
     name = supplier.get("name_zh") or supplier.get("name_en") or sid
@@ -428,16 +431,87 @@ def _check_one_supplier_sync(sess: requests.Session, supplier: dict) -> dict:
             "checked_at": datetime.now().isoformat(timespec="seconds"),
             "note": "未安装 LinkMoney Skill，无 endpoint",
         }
+
+    # v5.2: 白名单检查 — 非白名单端点直接标记 blocked
+    if not _is_endpoint_allowed(endpoint):
+        _log_health_check(sid, endpoint, "blocked", 0, "endpoint not in whitelist")
+        return {
+            "supplier_id": sid,
+            "name": name,
+            "endpoint": endpoint,
+            "status": "blocked",
+            "latency_ms": 0,
+            "checked_at": datetime.now().isoformat(timespec="seconds"),
+            "note": "端点不在白名单内（严格模式拒绝）",
+        }
+
+    # v5.2: 熔断检查 — 已熔断的端点直接返回 offline
+    if _is_circuit_tripped(endpoint):
+        _log_health_check(sid, endpoint, "offline", 0, "circuit breaker tripped")
+        return {
+            "supplier_id": sid,
+            "name": name,
+            "endpoint": endpoint,
+            "status": "offline",
+            "latency_ms": 0,
+            "checked_at": datetime.now().isoformat(timespec="seconds"),
+            "note": "熔断中（连续失败 3 次，5 分钟后恢复）",
+        }
+
     url = urljoin(endpoint.rstrip("/") + "/", "manifest.json")
     t0 = time.time()
     try:
         r = sess.get(url, timeout=_HEALTH_TIMEOUT)
         latency = int((time.time() - t0) * 1000)
+
+        # v5.2: 响应大小检查
+        if len(r.content) > _MANIFEST_MAX_TOTAL_SIZE:
+            _record_circuit_failure(endpoint)
+            _log_health_check(sid, endpoint, "degraded", latency, f"response too large: {len(r.content)} bytes")
+            return {
+                "supplier_id": sid,
+                "name": name,
+                "endpoint": endpoint,
+                "status": "degraded",
+                "latency_ms": latency,
+                "checked_at": datetime.now().isoformat(timespec="seconds"),
+                "note": f"响应过大: {len(r.content)} bytes",
+            }
+
         try:
             payload = r.json()
         except Exception:  # noqa: BLE001
             payload = {}
+            _record_circuit_failure(endpoint)
+            _log_health_check(sid, endpoint, "degraded", latency, "JSON parse failed")
+            return {
+                "supplier_id": sid,
+                "name": name,
+                "endpoint": endpoint,
+                "status": "degraded",
+                "latency_ms": latency,
+                "checked_at": datetime.now().isoformat(timespec="seconds"),
+                "http_status": r.status_code,
+                "note": "JSON 解析失败",
+            }
+
+        # v5.2: manifest 字段白名单 + 深度 + 类型校验
         if r.status_code == 200 and isinstance(payload, dict) and "tools" in payload:
+            if not _validate_manifest(payload):
+                _record_circuit_failure(endpoint)
+                _log_health_check(sid, endpoint, "degraded", latency, "manifest validation failed")
+                return {
+                    "supplier_id": sid,
+                    "name": name,
+                    "endpoint": endpoint,
+                    "status": "degraded",
+                    "latency_ms": latency,
+                    "checked_at": datetime.now().isoformat(timespec="seconds"),
+                    "note": "manifest 安全校验失败（字段/深度/类型不合规）",
+                }
+            # 成功：重置熔断 + 审计日志
+            _record_circuit_success(endpoint)
+            _log_health_check(sid, endpoint, "online", latency, "ok")
             return {
                 "supplier_id": sid,
                 "name": name,
@@ -446,6 +520,8 @@ def _check_one_supplier_sync(sess: requests.Session, supplier: dict) -> dict:
                 "latency_ms": latency,
                 "checked_at": datetime.now().isoformat(timespec="seconds"),
             }
+        _record_circuit_failure(endpoint)
+        _log_health_check(sid, endpoint, "degraded", latency, f"http {r.status_code}")
         return {
             "supplier_id": sid,
             "name": name,
@@ -456,6 +532,8 @@ def _check_one_supplier_sync(sess: requests.Session, supplier: dict) -> dict:
             "http_status": r.status_code,
         }
     except requests.exceptions.Timeout:
+        _record_circuit_failure(endpoint)
+        _log_health_check(sid, endpoint, "offline", int((time.time() - t0) * 1000), "timeout")
         return {
             "supplier_id": sid,
             "name": name,
@@ -466,6 +544,8 @@ def _check_one_supplier_sync(sess: requests.Session, supplier: dict) -> dict:
             "note": "timeout",
         }
     except Exception as e:  # noqa: BLE001
+        _record_circuit_failure(endpoint)
+        _log_health_check(sid, endpoint, "offline", int((time.time() - t0) * 1000), str(e)[:200])
         return {
             "supplier_id": sid,
             "name": name,

@@ -365,12 +365,13 @@ def audit_text_with_llm(text: str, llm_provider=None) -> AuditResult:
 {{"risk_level": "low|medium|high", "reasons": ["原因1", "原因2"]}}"""
 
         # 复用 LLM provider 的 raw call
+        # 注意：ArkProvider 的属性是 BASE_URL（类属性大写）和 flash_model（非 model_flash）
         import requests
         resp = requests.post(
-            f"{llm_provider.base_url}/chat/completions",
+            f"{llm_provider.BASE_URL}/chat/completions",
             headers={"Authorization": f"Bearer {llm_provider.api_key}"},
             json={
-                "model": llm_provider.model_flash,
+                "model": llm_provider.flash_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1,
                 "max_tokens": 200,

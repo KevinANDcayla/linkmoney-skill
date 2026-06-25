@@ -1637,6 +1637,9 @@ def find_china_supplier(
             ).fetchall()
         else:
             product_rows = []
+        # v5.2: 加载动态权重（积累学习层），失败回退默认值
+        match_weights_data = _load_match_weights(conn)
+        dynamic_weights = match_weights_data["weights"]
 
     if not supplier_rows:
         return {"matches": [], "message": f"No supplier found for category: {category}"}
@@ -1786,6 +1789,30 @@ def find_china_supplier(
                 dim_skill = min(5, dim_skill + 2)  # 安装数高微加
         score += dim_skill
 
+        # v5.2: 用动态权重重新归一化（积累学习层）
+        # 每个维度先转为 0-1 比例（dim_value / default_max），再用动态权重加权
+        # 当 weights = defaults 时，score 不变；weights 变化时，score 按学习结果重加权
+        # 除以权重总和确保 score ∈ [0, 100]（即使权重因步长限制总和不等于 100）
+        _weight_sum = sum(dynamic_weights.values()) or 100
+        ratio_category = dim_category / 30.0
+        ratio_spec = dim_spec / 20.0
+        ratio_moq = dim_moq / 15.0
+        ratio_price = dim_price / 15.0
+        ratio_certs = dim_certs / 10.0
+        ratio_location = dim_location / 5.0
+        ratio_skill = dim_skill / 5.0
+        score = int(
+            (
+                ratio_category * dynamic_weights["category"] +
+                ratio_spec * dynamic_weights["spec"] +
+                ratio_moq * dynamic_weights["moq"] +
+                ratio_price * dynamic_weights["price"] +
+                ratio_certs * dynamic_weights["certs"] +
+                ratio_location * dynamic_weights["location"] +
+                ratio_skill * dynamic_weights["skill"]
+            ) * 100 / _weight_sum
+        )
+
         # 确保分数在 0-100
         score = max(0, min(100, score))
 
@@ -1814,6 +1841,9 @@ def find_china_supplier(
                 "location": dim_location,
                 "skill": dim_skill,
                 "total": score,
+                # v5.2: 动态权重（积累学习层），让 Agent 看到当前实际权重
+                "dynamic_weights": dynamic_weights,
+                "weights_source": "learned" if match_weights_data["sample_count"] > 0 else "default",
             },
             "certifications": [c["type"] if isinstance(c, dict) else c for c in s.get("certifications", [])],
             "has_skill": s["agent_skill_installed"],
@@ -1875,7 +1905,7 @@ def find_china_supplier(
         },
         "live_suppliers": skilled_count,
         "cached_suppliers": len(top_matches) - skilled_count,
-        "scoring_model": "v4.0 7-dimensional weighted: category(30%) + spec(20%) + moq(15%) + price(15%) + certs(10%) + location(5%) + skill(5%)",
+        "scoring_model": f"v5.2 7-dimensional weighted (dynamic): category({dynamic_weights['category']}) + spec({dynamic_weights['spec']}) + moq({dynamic_weights['moq']}) + price({dynamic_weights['price']}) + certs({dynamic_weights['certs']}) + location({dynamic_weights['location']}) + skill({dynamic_weights['skill']})",
     }
 
     # 写入缓存（修复：移到 return 之前）
@@ -2043,7 +2073,45 @@ def match_spec(category: str, specification: str):
     规格匹配咨询
     输入：品类 + 规格需求
     输出：匹配方案 + 公差建议
+
+    v5.2: 优先用 LLM 解析 specification（能理解 M8/DIN933/304SS 等具体参数），
+    LLM 不可用时降级回硬编码知识库（仅按品类返回通用建议）。
     """
+    # v5.2: LLM 增强 — 解析具体 specification，给出针对性的公差/材料建议
+    try:
+        llm = get_llm()
+        if llm.is_available():
+            prompt = f"""你是 B2B 工业品规格匹配专家。给定品类和规格需求，输出严格 JSON：
+{{
+  "industry_standards": ["..."],
+  "tolerance_advice": {{"standard": "±Xmm", "precision": "±Xmm"}},
+  "material_options": ["..."],
+  "additional_options": {{}},
+  "advice": "一句话匹配建议，必须引用 specification 中的具体参数"
+}}
+
+品类: {category}
+规格需求: {specification}
+
+约束:
+1. 仅输出 JSON，不要 markdown 代码块
+2. 若 specification 包含具体数值（如 M8 / 304SS / PN16），tolerance 和 material 必须与之匹配
+3. 若品类未知，industry_standards 返回 ["GB"]，advice 写明"该品类建议人工确认\""""
+            result = llm._call(
+                model=llm.flash_model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=800,
+                temperature=0.2,
+            )
+            parsed = json.loads(result)
+            parsed["source"] = "llm"
+            parsed["category"] = category
+            parsed["specification"] = specification
+            return parsed
+    except Exception as e:
+        logger.warning(f"match_spec LLM failed, fallback to hardcoded: {e}")
+
+    # Fallback: 硬编码知识库（7 品类）
     spec_knowledge = {
         "fastener": {
             "standards": ["DIN", "ISO", "ANSI", "JIS", "GB"],
@@ -2093,6 +2161,7 @@ def match_spec(category: str, specification: str):
         "material_options": info.get("material_options", []),
         "additional_options": {k: v for k, v in info.items() if k not in ["standards", "tolerance", "material_options"]},
         "advice": f"建议使用 {info.get('standards', ['GB'])[0]} 标准，公差取 {info.get('tolerance', {}).get('standard', '标准级')}",
+        "source": "hardcoded_fallback",
     }
 
 
@@ -2128,18 +2197,48 @@ def download_cert(supplier_id: str, cert_type: str):
             "cert_type": cert,
             "valid_until": "unknown",
             "is_valid": True,
-            "download_url": "",
-            "note": "Certification type recorded but no document file available",
+            "download_url": None,
+            "note": "Certification type recorded but no document file available. Contact supplier directly for certificate copy.",
         }
+
+    # dict 形式的认证（含 type/valid_until/file）
+    cert_type = cert.get("type", "unknown")
+    valid_until = cert.get("valid_until", "unknown")
+
+    # 解析有效期（容错处理）
+    is_valid = True
+    if valid_until and valid_until != "unknown":
+        try:
+            is_valid = datetime.strptime(valid_until, "%Y-%m-%d") > datetime.now()
+        except (ValueError, TypeError):
+            is_valid = True  # 日期解析失败，默认有效
+
+    # v5.2: 校验文件是否真实存在，避免返回虚假 URL 导致 404
+    cert_file = cert.get("file", "")
+    download_url = None
+    file_note = "No document file attached. Contact supplier directly for certificate copy."
+
+    if cert_file:
+        # 构造文件绝对路径（cert_file 通常是 /uploads/xxx.pdf 形式）
+        upload_dir = Path(__file__).parent.parent / "data" / "uploads"
+        file_path = upload_dir / cert_file.lstrip("/").replace("uploads/", "")
+        if file_path.exists() and file_path.is_file():
+            # 文件存在，返回真实下载 URL（修复：默认 URL 包含端口）
+            base_url = os.getenv("LINKMONEY_BASE_URL", "http://118.196.34.217:8765").rstrip("/")
+            download_url = f"{base_url}/uploads/{cert_file.lstrip('/').replace('uploads/', '')}"
+            file_note = "Document file available for download."
+        else:
+            file_note = f"Document file path recorded ({cert_file}) but file not found on server. Contact supplier directly."
 
     return {
         "available": True,
         "supplier_id": supplier_id,
-        "supplier_name": supplier["name_zh"],
-        "cert_type": cert["type"],
-        "valid_until": cert["valid_until"],
-        "is_valid": datetime.strptime(cert["valid_until"], "%Y-%m-%d") > datetime.now(),
-        "download_url": f"{os.getenv('LINKMONEY_BASE_URL', 'http://118.196.34.217')}{cert['file']}",
+        "supplier_name": supplier.get("name_en") or supplier["name_zh"],
+        "cert_type": cert_type,
+        "valid_until": valid_until,
+        "is_valid": is_valid,
+        "download_url": download_url,
+        "note": file_note,
     }
 
 
@@ -3259,6 +3358,8 @@ def send_quote(req: QuoteRequest, request: Request):
             "UPDATE rfqs SET status = 'quoted', quoted_price_usd = ?, lead_time_days = ?, total_price_usd = ?, notes = ?, updated_at = ? WHERE id = ?",
             (req.unit_price_usd, req.lead_time_days, total, req.notes, datetime.now().isoformat() + "Z", req.rfq_id),
         )
+        # v5.2: 报价响应后重算 trust_score（活跃行为，未来可加权）
+        _recalculate_trust_score(conn, req.supplier_id)
         conn.commit()
 
     # 获取供应商和采购方信息用于邮件
@@ -3269,6 +3370,29 @@ def send_quote(req: QuoteRequest, request: Request):
 
     supplier = _row_to_supplier(supplier_row) if supplier_row else {}
     buyer = dict(buyer_row) if buyer_row else {"company": rfq["buyer_id"], "country": "", "email": rfq.get("contact_email", "")}
+
+    # v5.2: 用 LLM 草拟专业报价邮件（失败降级回写死模板）
+    drafted = None
+    try:
+        llm = get_llm()
+        if llm.is_available():
+            # 字段映射：_row_to_supplier 返回 name_zh/name_en，draft_quote_email 读 name
+            supplier_for_llm = {
+                **supplier,
+                "name": supplier.get("name_en") or supplier.get("name_zh", ""),
+                "city": supplier.get("city", ""),
+            }
+            drafted = llm.draft_quote_email(
+                rfq=rfq,
+                supplier=supplier_for_llm,
+                quote_price_usd=req.unit_price_usd,
+                lead_time_days=req.lead_time_days,
+                buyer_lang=buyer.get("language", "en") if isinstance(buyer, dict) else "en",
+            )
+            logger.info(f"draft_quote_email success: subject={drafted.get('subject','?')[:50]}")
+    except Exception as e:
+        logger.warning(f"draft_quote_email failed, fallback to template: {e}")
+        drafted = None
 
     # 异步发送邮件通知采购方
     try:
@@ -3282,6 +3406,7 @@ def send_quote(req: QuoteRequest, request: Request):
                 "lead_time_days": req.lead_time_days,
                 "status": "quoted",
             },
+            drafted=drafted,  # v5.2: 传入 LLM 草稿（None 时用模板）
         )
     except Exception:
         pass
@@ -3789,7 +3914,7 @@ def _compute_trust_level(score: float, email_v: int, phone_v: int, license_v: in
 def _auto_evaluate_supplier(supplier: dict) -> dict:
     """v2.1 内部自动评估（5 维度），不暴露给工厂自助"""
     # 1. 资质
-    age = max(0, 2026 - supplier.get("year_established", 0))
+    age = max(0, datetime.now().year - supplier.get("year_established", 0))
     qual_score = min(100, age * 4 + 20)  # 5 年=40, 10 年=60
 
     # 2. 产能（员工数 + 年营收）
@@ -3808,9 +3933,15 @@ def _auto_evaluate_supplier(supplier: dict) -> dict:
     exp_ratio = supplier.get("export_ratio", 0)
     export_score = min(100, exp_ratio)
 
-    # 4. 质量（认证数）
+    # 4. 质量（认证数 + v5.2 评价均分加权）
     cert_count = len(supplier.get("certifications", []))
     quality_score = min(100, cert_count * 20)
+    # v5.2: 若有评价，叠加 review 加权（4.5 星→+15, 3.0 星→0, 2.0 星→-10）
+    review_count = supplier.get("review_count", 0)
+    review_avg = supplier.get("review_avg", 0)
+    if review_count and review_count > 0 and review_avg:
+        review_bonus = (review_avg - 3.0) * 10
+        quality_score = max(0, min(100, quality_score + int(review_bonus)))
 
     # 5. 合规（简化版：有邮箱 + 已装 Skill +25）
     compliance_score = 30
@@ -3840,6 +3971,303 @@ def _auto_evaluate_supplier(supplier: dict) -> dict:
     }
 
 
+def _recalculate_trust_score(conn, supplier_id: str):
+    """v5.2: 动态重算供应商 trust_score 并写入数据库。
+
+    在以下 5 个事件后触发：
+    1. verify_email — 邮箱验证通过
+    2. link_supplier_mcp — 装上 MCP Skill
+    3. unlink_supplier_mcp — 取消 MCP Skill
+    4. leave_review — 收到新评价
+    5. send_quote — 报价响应
+
+    安全约束：
+    - 分数范围 [0, 100]（_auto_evaluate_supplier 内部已 clamp）
+    - 失败时静默降级（不影响业务流程）
+    - 每次重算都写入 trust_evaluations 表留审计快照
+    """
+    try:
+        row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not row:
+            return
+        s = _row_to_supplier(row)
+        eval_result = _auto_evaluate_supplier({
+            "year_established": s.get("year_established", 0),
+            "employees": s.get("employees", 0),
+            "annual_revenue_usd": s.get("annual_revenue_usd", 0),
+            "export_ratio": s.get("export_ratio", 0),
+            "certifications": s.get("certifications", []),
+            "agent_skill_installed": s.get("agent_skill_installed", 0),
+            "email_verified": s.get("email_verified", 0),
+            "review_avg": s.get("review_avg", 0),
+            "review_count": s.get("review_count", 0),
+        })
+        # 边界保护：分数必须在 [0, 100]
+        overall = max(0, min(100, eval_result["overall_score"]))
+        trust_level = eval_result["trust_level"]
+        conn.execute(
+            "UPDATE suppliers SET trust_score = ?, trust_level = ?, updated_at = ? WHERE id = ?",
+            (overall, trust_level, datetime.now().isoformat() + "Z", supplier_id),
+        )
+        # 写入评估快照（审计追溯）
+        conn.execute(
+            "INSERT INTO trust_evaluations(target_id, target_type, overall_score, dimensions, trust_level) "
+            "VALUES (?, 'supplier', ?, ?, ?)",
+            (supplier_id, overall,
+             json.dumps(eval_result["dimensions"], ensure_ascii=False),
+             trust_level),
+        )
+        logger.info(f"trust_score recalculated for {supplier_id}: {overall} ({trust_level})")
+    except Exception as e:
+        logger.warning(f"_recalculate_trust_score failed for {supplier_id}: {e}")
+
+
+# ===== v5.2 积累学习层：match_score 权重动态调整 =====
+#
+# 设计目标：基于历史 RFQ→报价→评价数据，自动微调 find_china_supplier 的 7 维权重，
+# 让评分更精准地反映"实际成交转化率"。
+#
+# 安全约束（用户明确要求：参数范围 + 时效控制，避免累计后多次修改导致运行错误崩盘）：
+# 1. 每个权重必须在 _WEIGHT_BOUNDS 边界内（防止极端值）
+# 2. 单次调整幅度 ≤ _MAX_ADJUST_STEP（防止突变）
+# 3. 冷却时间 24 小时（避免频繁修改导致不稳定）
+# 4. 最小样本量 _MIN_SAMPLES_TO_LEARN（避免噪声）
+# 5. 持久化到 config 表（重启不丢失）
+# 6. 失败时静默降级到默认权重（不影响业务流程）
+# 7. 所有权重归一化为总和 = 100（保证 score 范围 [0, 100]）
+
+_DEFAULT_MATCH_WEIGHTS = {
+    "category": 30,
+    "spec": 20,
+    "moq": 15,
+    "price": 15,
+    "certs": 10,
+    "location": 5,
+    "skill": 5,
+}
+
+# 每个维度的边界 [min, max]（防止极端值导致评分失衡）
+_WEIGHT_BOUNDS = {
+    "category": (10, 50),
+    "spec": (5, 40),
+    "moq": (5, 30),
+    "price": (5, 30),
+    "certs": (2, 20),
+    "location": (0, 15),
+    "skill": (0, 15),
+}
+
+_MAX_ADJUST_STEP = 3          # 单次调整最大幅度（防止突变）
+_MIN_SAMPLES_TO_LEARN = 10    # 最小样本量（不足不学习，避免噪声）
+_LEARN_COOLDOWN_SECONDS = 86400  # 学习冷却时间：24 小时
+
+
+def _load_match_weights(conn) -> dict:
+    """从 config 表加载 match_weights，失败回退默认值。
+
+    返回结构：
+    {
+        "weights": {"category": 30, "spec": 20, ...},  # 归一化后的权重
+        "last_adjusted_at": "2026-06-25T12:00:00Z",     # 上次调整时间
+        "sample_count": 25,                              # 上次学习时的样本量
+    }
+    """
+    try:
+        row = conn.execute("SELECT value FROM config WHERE key = 'match_weights'").fetchone()
+        if row:
+            data = json.loads(row["value"])
+            weights = data.get("weights", {})
+            # 校验结构完整性：7 个维度必须都在
+            if all(k in weights for k in _DEFAULT_MATCH_WEIGHTS):
+                # 边界保护：每个权重必须在允许范围内
+                sanitized = {}
+                for k, default_v in _DEFAULT_MATCH_WEIGHTS.items():
+                    v = weights.get(k, default_v)
+                    lo, hi = _WEIGHT_BOUNDS[k]
+                    sanitized[k] = max(lo, min(hi, int(v)))
+                return {
+                    "weights": sanitized,
+                    "last_adjusted_at": data.get("last_adjusted_at", ""),
+                    "sample_count": data.get("sample_count", 0),
+                }
+    except Exception as e:
+        logger.warning(f"_load_match_weights failed, use defaults: {e}")
+    return {
+        "weights": dict(_DEFAULT_MATCH_WEIGHTS),
+        "last_adjusted_at": "",
+        "sample_count": 0,
+    }
+
+
+def _save_match_weights(conn, weights_data: dict):
+    """保存 match_weights 到 config 表（持久化，重启不丢失）。"""
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES (?, ?)",
+            ("match_weights", json.dumps(weights_data, ensure_ascii=False)),
+        )
+    except Exception as e:
+        logger.warning(f"_save_match_weights failed: {e}")
+
+
+def _learn_match_weights(conn):
+    """v5.2: 基于历史 RFQ→报价→评价数据调整 7 维权重。
+
+    学习信号：
+    - 正向：RFQ 被报价且评价 ≥ 4 星 → 匹配维度有效，权重微增
+    - 负向：RFQ 被报价但评价 ≤ 2 星 → 匹配维度失效，权重微减
+
+    安全约束：
+    - 冷却期 24 小时（避免频繁修改导致运行错误）
+    - 最小样本量 10（避免噪声）
+    - 单次调整幅度 ≤ 3（防止突变）
+    - 每个权重在边界范围内（防止极端值）
+    - 归一化总和 = 100（保证 score 范围稳定）
+    - 失败时静默降级（不影响业务流程）
+    """
+    try:
+        current = _load_match_weights(conn)
+
+        # 时效控制：冷却期内不学习
+        if current["last_adjusted_at"]:
+            try:
+                last_ts = datetime.fromisoformat(
+                    current["last_adjusted_at"].replace("Z", "")
+                )
+                elapsed = (datetime.now() - last_ts).total_seconds()
+                if elapsed < _LEARN_COOLDOWN_SECONDS:
+                    return  # 冷却中，跳过
+            except Exception:
+                pass  # 时间戳解析失败，继续学习
+
+        # 收集历史样本：已报价的 RFQ + 对应评价
+        # 注意：rfqs 表无 category 列；suppliers 表无 location 列（拆为 city/province/port）
+        rows = conn.execute("""
+            SELECT r.rating, rfq.quantity, rfq.target_price_usd,
+                   s.moq, s.certifications, s.port, s.agent_skill_installed
+            FROM reviews r
+            JOIN rfqs rfq ON r.rfq_id = rfq.id
+            JOIN suppliers s ON r.target_id = s.id
+            WHERE r.target_type = 'supplier' AND rfq.status = 'quoted'
+        """).fetchall()
+
+        sample_count = len(rows)
+        if sample_count < _MIN_SAMPLES_TO_LEARN:
+            return  # 样本不足，不学习
+
+        # 统计每个维度在"高分评价"和"低分评价"中的表现
+        positive_counts = {k: 0 for k in _DEFAULT_MATCH_WEIGHTS}
+        negative_counts = {k: 0 for k in _DEFAULT_MATCH_WEIGHTS}
+        total_positive = 0
+        total_negative = 0
+
+        for row in rows:
+            rating = row["rating"] if row["rating"] else 0
+            # 解析 certifications（可能是 JSON 字符串）
+            certs = row["certifications"] or "[]"
+            if isinstance(certs, str):
+                try:
+                    certs = json.loads(certs)
+                except Exception:
+                    certs = []
+            has_certs = isinstance(certs, list) and len(certs) > 0
+            moq_ok = row["quantity"] and row["moq"] and row["quantity"] >= row["moq"]
+            has_price = row["target_price_usd"] and row["target_price_usd"] > 0
+            has_skill = row["agent_skill_installed"]
+            has_port = bool(row["port"])  # suppliers 表用 port 列表示出口港口
+
+            if rating >= 4:
+                total_positive += 1
+                positive_counts["category"] += 1  # RFQ 已匹配到供应商
+                positive_counts["spec"] += 1      # RFQ 已到报价阶段
+                if moq_ok:
+                    positive_counts["moq"] += 1
+                if has_price:
+                    positive_counts["price"] += 1
+                if has_certs:
+                    positive_counts["certs"] += 1
+                if has_skill:
+                    positive_counts["skill"] += 1
+                if has_port:
+                    positive_counts["location"] += 1
+            elif rating <= 2:
+                total_negative += 1
+                negative_counts["category"] += 1
+                negative_counts["spec"] += 1
+                if moq_ok:
+                    negative_counts["moq"] += 1
+                if has_price:
+                    negative_counts["price"] += 1
+                if has_certs:
+                    negative_counts["certs"] += 1
+                if has_skill:
+                    negative_counts["skill"] += 1
+                if has_port:
+                    negative_counts["location"] += 1
+
+        if total_positive == 0 and total_negative == 0:
+            return  # 无有效信号
+
+        # 计算调整方向：正样本占比高 → 权重微增；负样本占比高 → 权重微减
+        new_weights = dict(current["weights"])
+        for dim in _DEFAULT_MATCH_WEIGHTS:
+            pos_rate = positive_counts[dim] / total_positive if total_positive > 0 else 0
+            neg_rate = negative_counts[dim] / total_negative if total_negative > 0 else 0
+            # 调整信号：正向比例 - 负向比例，范围 [-1, 1]
+            signal = pos_rate - neg_rate
+            # 调整幅度：signal * _MAX_ADJUST_STEP，范围 [-3, +3]
+            adjustment = int(signal * _MAX_ADJUST_STEP)
+            if adjustment == 0:
+                continue  # 无显著信号，不调整
+
+            new_v = new_weights[dim] + adjustment
+            # 边界保护
+            lo, hi = _WEIGHT_BOUNDS[dim]
+            new_v = max(lo, min(hi, new_v))
+            new_weights[dim] = new_v
+
+        # 归一化：按比例缩放使总和接近 100
+        total = sum(new_weights.values())
+        if total > 0 and total != 100:
+            scale = 100.0 / total
+            new_weights = {
+                k: max(_WEIGHT_BOUNDS[k][0], min(_WEIGHT_BOUNDS[k][1], int(v * scale)))
+                for k, v in new_weights.items()
+            }
+
+        # 最终安全保护：确保每个维度相对原值的偏移 ≤ _MAX_ADJUST_STEP
+        # （归一化可能导致某个维度超出步长限制，此处强制拉回）
+        for dim in _DEFAULT_MATCH_WEIGHTS:
+            original = current["weights"][dim]
+            new_v = new_weights[dim]
+            if new_v - original > _MAX_ADJUST_STEP:
+                new_weights[dim] = original + _MAX_ADJUST_STEP
+            elif original - new_v > _MAX_ADJUST_STEP:
+                new_weights[dim] = original - _MAX_ADJUST_STEP
+
+        # 检查是否真的有变化
+        if new_weights == current["weights"]:
+            return  # 无变化，不写入
+
+        # 持久化
+        new_data = {
+            "weights": new_weights,
+            "last_adjusted_at": datetime.now().isoformat() + "Z",
+            "sample_count": sample_count,
+        }
+        _save_match_weights(conn, new_data)
+        conn.commit()
+        # 失效 find_china_supplier 缓存，让新权重立即生效
+        _supplier_cache.invalidate("find:")
+        logger.info(
+            f"[LEARN] match_weights adjusted: sample_count={sample_count}, "
+            f"new_weights={new_weights}"
+        )
+    except Exception as e:
+        # 失败时静默降级（不影响业务流程）
+        logger.warning(f"_learn_match_weights failed (silent fallback): {e}")
+
+
 # ===== v2.1 注册端点 =====
 
 class RegisterSupplierRequest(BaseModel):
@@ -3860,6 +4288,10 @@ class RegisterSupplierRequest(BaseModel):
     lead_time_days_standard: int = 0
     lead_time_days_express: int = 0
     languages: list = ["zh", "en"]
+    # v5.2: BD 现场采集 — 传图片 URL 时用 LLM 多模态抽取结构化字段
+    image_urls: list = []          # 工厂照片公网 URL（最多 10 张）
+    audio_text: str = ""           # BD 录音转写（可选）
+    factory_location: str = ""     # 工厂地址（可选）
 
 
 @app.post("/register_supplier")
@@ -3917,6 +4349,35 @@ def register_supplier(req: RegisterSupplierRequest):
     city = ""
     province = ""
     port = "Ningbo"
+
+    # v5.2: BD 现场采集 — 若传了图片 URL，用 LLM 多模态抽取结构化字段
+    # 仅当原字段为空时用 LLM 结果覆盖（不覆盖工厂已填的数据）
+    llm_profile = None
+    if req.image_urls:
+        try:
+            llm = get_llm()
+            if llm.is_available():
+                llm_profile = llm.extract_factory_profile(
+                    image_urls=req.image_urls,
+                    audio_text=req.audio_text,
+                    location=req.factory_location,
+                )
+                if not req.employees and llm_profile.get("employees"):
+                    req.employees = llm_profile["employees"]
+                if not req.year_established and llm_profile.get("year_established"):
+                    req.year_established = llm_profile["year_established"]
+                if not req.certifications and llm_profile.get("certifications"):
+                    req.certifications = llm_profile["certifications"]
+                if not req.moq and llm_profile.get("moq"):
+                    req.moq = llm_profile["moq"]
+                if not req.main_markets and llm_profile.get("main_export_markets"):
+                    req.main_markets = llm_profile["main_export_markets"]
+                if req.category in ("", "other") and llm_profile.get("suggested_category"):
+                    req.category = llm_profile["suggested_category"]
+                logger.info(f"extract_factory_profile success: confidence={llm_profile.get('confidence','?')}")
+        except Exception as e:
+            logger.warning(f"extract_factory_profile failed, fallback to text-only: {e}")
+            # 失败不阻塞注册，继续走纯文本流程
 
     # 信用评估
     eval_result = _auto_evaluate_supplier({
@@ -4121,6 +4582,7 @@ trust_score: {eval_result['overall_score']}
             "next_step": "请到邮箱点击验证链接（演示版会直接标记为已验证）"
         },
         "auto_evaluation": eval_result,
+        "llm_profile_extracted": llm_profile,  # v5.2: BD 图片抽取结果（None 表示未用）
         "auto_generated_skill": {
             "skill_md_preview": skill_md[:500] + "...",
             "full_skill_in_git": f"https://linkmoney.online/skill.md?supplier={supplier_id}",
@@ -4232,6 +4694,8 @@ def verify_email(token: str):
                 "UPDATE suppliers SET email_verified = 1, verification_token = '' WHERE id = ?",
                 (v["target_id"],),
             )
+            # v5.2: 邮箱验证后重算 trust_score（compliance +30）
+            _recalculate_trust_score(conn, v["target_id"])
         elif v["target_type"] == "buyer_email":
             conn.execute(
                 "UPDATE overseas_buyers SET email_verified = 1 WHERE id = ?",
@@ -4311,6 +4775,8 @@ def link_supplier_mcp(supplier_id: str, req: LinkMcpRequest):
             now_iso,
             supplier_id,
         ))
+        # v5.2: 装上 Skill 后重算 trust_score（compliance +40）
+        _recalculate_trust_score(conn, supplier_id)
         conn.commit()
 
         # 5. 失效缓存，让 find_china_supplier 立即返回 has_skill=true
@@ -4348,6 +4814,8 @@ def unlink_supplier_mcp(supplier_id: str, req: LinkMcpRequest):
                 updated_at = ?
             WHERE id = ?
         """, (datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"), supplier_id))
+        # v5.2: 取消 Skill 后重算 trust_score（compliance -40）
+        _recalculate_trust_score(conn, supplier_id)
         conn.commit()
         _supplier_cache.invalidate("find:")
 
@@ -5194,6 +5662,9 @@ def leave_review(req: LeaveReviewRequest):
                 "UPDATE suppliers SET review_avg = ?, review_count = ? WHERE id = ?",
                 (avg, cnt, req.target_id),
             )
+            # v5.2: 收到评价后重算 trust_score（quality 维度会叠加 review 加权）
+            # 必须在 gold_badge 判定之前，否则金标检查用的还是旧 trust_score
+            _recalculate_trust_score(conn, req.target_id)
             # 评分>=4.5 且 评价数>=5 且 trust_score>=80 -> 自动金标
             s_row_check = conn.execute("SELECT trust_score FROM suppliers WHERE id = ?", (req.target_id,)).fetchone()
             if avg >= 4.5 and cnt >= 5 and s_row_check and s_row_check["trust_score"] >= 80:
@@ -5203,6 +5674,9 @@ def leave_review(req: LeaveReviewRequest):
                 "UPDATE overseas_buyers SET trust_score = ? WHERE id = ?",
                 (avg, req.target_id),
             )
+        # v5.2: 积累学习层 — 评价是 RFQ 闭环最后一步，触发权重学习
+        # 安全约束：24 小时冷却 + 最小样本量 10 + 单次调整 ≤ 3 + 边界保护
+        _learn_match_weights(conn)
         conn.commit()
 
     return {
@@ -5218,7 +5692,7 @@ def leave_review(req: LeaveReviewRequest):
 @app.get("/health")
 def health_check():
     """简单健康检查端点（供 Docker healthcheck / 外部监控使用）"""
-    return {"status": "ok", "service": "linkmoney-api", "version": "4.1.0"}
+    return {"status": "ok", "service": "linkmoney-api", "version": "5.2.0"}
 
 
 # ===== 轻量访问统计 =====

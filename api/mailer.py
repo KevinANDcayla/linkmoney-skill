@@ -339,8 +339,12 @@ class Mailer:
         """
         self.send_async(to_email, subject, body, mail_type="notify_buyer_rfq_received")
 
-    def notify_buyer_quote_received(self, buyer: dict, supplier: dict, rfq: dict, quote: dict):
-        """通知海外采购方：中国供应商已报价"""
+    def notify_buyer_quote_received(self, buyer: dict, supplier: dict, rfq: dict, quote: dict, drafted: dict = None):
+        """通知海外采购方：中国供应商已报价
+
+        v5.2: 支持传入 LLM 草拟的邮件内容（drafted={"subject":..., "body":...}），
+        None 时用写死模板。LLM body 是纯文本，这里包进 HTML 容器。
+        """
         original_email = buyer.get("email", rfq.get("contact_email", ""))
         to_email, suffix = self._resolve_to(original_email, f"采购方 {buyer.get('company', '')}")
 
@@ -352,6 +356,34 @@ class Mailer:
             "accepted": "Accepted",
             "closed": "Closed",
         }
+
+        # v5.2: 若有 LLM 草稿，用它替代 subject + body
+        if drafted and drafted.get("body"):
+            from html import escape as _html_escape
+            subject = drafted.get("subject", subject)
+            body_text = drafted["body"]
+            body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <div style="background: linear-gradient(135deg, #0A0E27, #1a1f4a); color: #fff; padding: 24px; border-radius: 12px 12px 0 0;">
+                <h1 style="margin:0; font-size:24px;">🔗 LinkMoney Quote Update</h1>
+                <p style="margin:8px 0 0; opacity:0.8;">Agent-Powered B2B Trade Connector</p>
+            </div>
+            <div style="background: #F5F7FA; padding: 24px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb;">
+                <pre style="white-space: pre-wrap; font-family: inherit; font-size: 14px; line-height: 1.6; margin: 0;">{_html_escape(body_text)}</pre>
+                <div style="background: #E2E3FF; border-radius: 8px; padding: 12px; margin: 16px 0;">
+                    <strong>Supplier Contact:</strong><br>
+                    {supplier.get('contact_person', '')} | {supplier.get('email', '')} | {supplier.get('phone', '')}<br>
+                    WeChat: {supplier.get('wechat', 'N/A')}
+                </div>
+            </div>
+            <div style="text-align:center; color:#999; font-size:12px; margin-top:16px;">
+                LinkMoney — Link the Money, Link the World<br>
+                <a href="https://linkmoney.online" style="color:#0066FF;">linkmoney.online</a>
+            </div>
+        </div>
+        """
+            self.send_async(to_email, subject, body, mail_type="notify_buyer_quote_received_llm")
+            return
 
         body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">

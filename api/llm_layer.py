@@ -425,7 +425,7 @@ RFQ text:
         }
         """
         if not self.is_available():
-            raise DeepSeekError("DEEPSEEK_API_KEY not configured")
+            raise LLMError("ARK_API_KEY not configured")
 
         # V4 Pro 支持多模态
         content = []

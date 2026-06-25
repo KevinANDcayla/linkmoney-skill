@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api/ .
 # Landing page（营销首页）
 COPY web/ /app/web/
+# SKILL.md + mcp_manifest.json 放到根目录（server.py 用 parent.parent 解析到 /）
+COPY SKILL.md /SKILL.md
+COPY mcp_manifest.json /app/mcp_manifest.json
 # 数据目录必须放在 /data，因为 server.py 用 parent.parent 解析到 /
 COPY data/ /data/
 
