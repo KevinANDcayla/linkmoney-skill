@@ -4,9 +4,8 @@ description: |
   LinkMoney（连钱）—— Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商。
 
   【C 端（中国制造业老板侧）】 5 维 AI 出海 Agent 化评估 + 一键注册入驻（托管 MCP，零部署）+ 对话式产品管理
-  【W 端（海外采购方侧）】 一键找 2500 家中国工厂（16 品类：紧固件/电子/纺织/包装/机械/五金/注塑/汽配/家具/建材/化工/医疗/照明/运动/食品/玩具），查实时价格库存，5 秒发 RFQ。海外端永久免费。
-  【中间 Agent 维护层 v3.0】 健康检查、RFQ 路由、告警、自我优化
-  【Agent Marketplace v4.0】 公开 RFQ 市场、多供应商竞价对比、9 阶段执行仪表盘、公正 Agent 审计记录（含哈希指纹）
+  【W 端（海外采购方侧）】 一键找 2500 家中国工厂（16 品类：紧固件/电子/纺织/包装/机械/五金/注塑/汽配/家具/建材/化工/医疗/照明/运动/食品/玩具），查实时价格库存，5 秒发 RFQ。
+  【Agent Marketplace】 公开 RFQ 市场、多供应商竞价对比、9 阶段执行仪表盘、公正 Agent 审计记录（含哈希指纹）
   【LLM 辅助层】 火山引擎豆包模型集成（国内云服务，数据不出境），用于多语言翻译、RFQ 解析、工厂数据提取；未配置 API Key 时自动降级为规则引擎，不影响核心功能
 
   ⚠️ 数据外泄风险告知（请用户知悉）：
@@ -178,21 +177,7 @@ r = requests.post(f"{BASE}/submit_rfq", headers=HEADERS, json={
 | `submit_rfq` | 提交 RFQ 到中国供应商（自动邮件通知） | 询盘内容 + 供应商 ID + 联系人 | RFQ 状态 + 邮件已通知供应商 |
 | `send_quote` | 供应商对 RFQ 报价并邮件通知采购方 | RFQ ID + 供应商 ID + 报价 | 报价状态 + 邮件已通知采购方 |
 
-### 1.3 中间 Agent 维护层（v3.0，7 个 Tools，平台内部调用）
-
-> 「双边 Skill 之间的中维护者」— 内嵌在主 API 中，承担健康检查 / 路由 / 告警 / 自我优化四类职责。
-
-| Tool | 描述 | 输入 | 输出 |
-|------|------|------|------|
-| `agent_status` | 中间 Agent 元信息 + 当前健康度概览 | — | Agent 版本、启动时间、当前在线 / 离线厂家数 |
-| `agent_health` | 批量检查所有厂家数据状态 | `force=true` 可绕过缓存 | 每个厂家 online/degraded/offline + 延迟 |
-| `agent_routing` | RFQ 路由推荐（综合信任分 + 评价 + 健康度） | category + quantity + target_price_usd + need_live_data | 排序后的候选厂家 + 评分 + 决策理由 |
-| `agent_alerts` | 告警列表（厂家离线 / 降级 / 优化建议） | severity / limit | 告警条目（含 payload） |
-| `agent_maintenance` | 维护日志（健康检查 / 路由推荐 / 手动维护） | limit | 动作 / 目标 / 结果 / payload |
-| `agent_optimize` | 触发自我优化分析 | — | 全网指标 + 优化建议清单 |
-| `agent_maintain` | 手动触发维护任务 | action=health_check / optimize / clear_alerts / ping_supplier / reroute_requirement | 任务执行结果 |
-
-### 1.4 Agent Marketplace（v4.0，15 个 Tools，公开 RFQ 市场）
+### 1.3 Agent Marketplace（15 个 Tools，公开 RFQ 市场）
 
 > 公开的 B2B 询价竞价市场：采购方发布 RFQ → 多供应商竞价 → 选定中标 → 9 阶段执行跟踪 → 公正 Agent 审计。所有关键操作写入含哈希指纹的公正记录，确保交易可追溯、不可篡改。
 
@@ -214,7 +199,7 @@ r = requests.post(f"{BASE}/submit_rfq", headers=HEADERS, json={
 | `list_dashboard` | 仪表盘聚合数据 | — | 全局仪表盘 |
 | `get_dashboard` | 单个 RFQ 仪表盘 | rfq_id | RFQ 仪表盘 |
 
-### 1.5 LLM 辅助层（火山引擎豆包，国内云服务，数据不出境）
+### 1.4 LLM 辅助层（火山引擎豆包，国内云服务，数据不出境）
 
 > 使用火山引擎豆包模型（ARK API）进行多语言翻译、RFQ 解析、工厂数据提取。**火山引擎是字节跳动国内云服务，数据不出境，符合国内合规要求。** 未配置 `ARK_API_KEY` 时自动降级为规则引擎，不影响核心功能。可通过 `LLM_ENABLED=false` 完全禁用。
 
@@ -744,140 +729,7 @@ curl -X POST https://linkmoney.online/suppliers/YOUR_SUPPLIER_ID/link_mcp \
 
 ---
 
-## 8. LinkMoney 的自我分发（Agent 发现机制）
-
-LinkMoney 本身是一个 Skill，它通过以下方式让 Agent 主动发现和安装：
-
-### 8.1 分发平台矩阵
-
-| 平台 | 动作 | 状态 |
-|------|------|------|
-| **GitHub 公开仓库** | github.com/KevinANDcayla/linkmoney-skill | ✅ 已创建 |
-| **Anthropic Skills 官方 PR** | 提 PR 到 anthropics/skills | 🔄 进行中 |
-| **阿里云 AgentRun** | 官方首发国内平台 | 🔄 进行中 |
-| **Coze 商店** | 国内大流量分发 | 📋 计划中 |
-| **ClawHub** | 开源生态收录 | 📋 计划中 |
-| **Claude.ai Skills 目录** | 提交官方收录 | 📋 计划中 |
-| **千问 App** | 国内 C 端覆盖 | 📋 计划中 |
-| **钉钉 AI（悟空）** | 7000 万企业用户 | 📋 计划中 |
-| **腾讯元器** | MCP 插件市场 | 📋 计划中 |
-| **GitHub Copilot** | 开发者生态 | 📋 计划中 |
-
-### 8.2 获客飞轮
-
-```
-LinkMoney 自身被 Agent 装（自我分发）
-        ↓
-中国老板的 Agent 装 linkmoney（评估 + 一键入驻）
-        ↓
-海外采购方的 Agent 装 linkmoney（找中国供应商）
-        ↓
-中国老板和海外采购方都在 linkmoney 上"会面"
-        ↓
-成交 → linkmoney 收佣金 → 投入更多自我分发
-        ↓
-更多 Agent 装 linkmoney（飞轮加速）
-```
-
----
-
-## 8.3 v3.0 中间 Agent 维护层（中间维护者）
-
-> 这是 v3.0 的核心新增：在双边 Skill（C 端 + W 端）之间嵌入一个**中维护者 Agent**，承担平台自身健康。
-
-```
-┌─────────────────┐                         ┌─────────────────┐
-│  C 端 Skill     │                         │  W 端 Skill     │
-│  中国老板 Agent │                         │  海外采购方 Agent│
-│  (evaluate_sme) │                         │ (find_supplier) │
-└────────┬────────┘                         └────────┬────────┘
-         │                                           │
-         │  RFQ / 评估 / 一键入驻                      │ 询盘 / RFQ / 报价
-         ▼                                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│               LinkMoney 中间 Agent 维护层                    │
-│                                                             │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │ 健康检查     │  │ 智能路由     │  │ 告警 / 维护日志     │  │
-│  │ 巡检所有厂家 │  │ 综合信任+   │  │ 发现异常 + 留痕     │  │
-│  │ MCP 端点    │  │ 评价+健康度 │  │ 写入 SQLite         │  │
-│  │ online/     │  │ 给 RFQ 推荐 │  │ 可被任意端点查询     │  │
-│  │ degraded/   │  │ 最佳厂家     │  │                      │  │
-│  │ offline     │  │             │  │                      │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-│                                                             │
-│  自我优化：基于全网指标（在线率/平均信任分/金标数/RFQ 堆积）   │
-│  生成「运营建议」并以告警形式记录                             │
-└─────────────────────────────────────────────────────────────┘
-         │                                           │
-         ▼                                           ▼
-   厂家 A / B / C MCP 端点                  缓存 / 邮件 / 路由
-```
-
-**职责拆分：**
-
-| 职责 | 端点 | 谁来用 |
-|------|------|--------|
-| 健康检查 | `/agent/health` | 平台内部 / 监控 Agent |
-| 路由推荐 | `/agent/routing` | W 端 Agent 调 find_china_supplier 时可参考 |
-| 告警 | `/agent/alerts` | 平台运营 / 监控 |
-| 维护日志 | `/agent/maintenance` | 审计 / 排查 |
-| 自我优化 | `/agent/optimize` | 平台运营 / 数据驱动决策 |
-| 手动维护 | `/agent/maintain` | 平台运营（ping 单家 / 重路由某条需求） |
-
-**关键设计点：**
-
-1. **内嵌而非独立服务** — 与主 API 同进程，零额外部署成本，但模块边界清晰，可独立单元测试。
-2. **健康度缓存 TTL 120s** — 避免每次 RFQ 路由都去打 16+ 厂家端点。
-3. **告警 + 维护日志双轨** — 告警面向「发现问题」，日志面向「事后追溯」，分别走内存队列 + SQLite 持久化。
-4. **路由评分公式**：`trust_score * 0.35 + review_avg * 8 * 0.20 + 健康度奖励 + 金标奖励 + 安装数奖励 + 营收奖励` — 厂家离线且需要实时数据时直接过滤。
-5. **Bootstrap 自检** — 服务启动时跑一次全量健康检查，生成首批告警，方便 SRE 第一眼就看到全网状态。
-
----
-
-## 9. 商业合作
-
-### 9.1 收入模型
-
-> **核心原则：海外采购方（W 端）永远免费。** LinkMoney 是海外 Agent 的免费流量入口，所有成本由中国供应商（C 端）承担。
-
-| 收入来源 | 单价 | 客户群 | 说明 |
-|---------|------|--------|------|
-| **L1 评估包** | ¥19,800 | 中国制造业老板 | 5 维评估 + 路线图 |
-| **L2 入驻包** | ¥98,000 | 中国制造业老板 | 评估 + 注册入驻 + 产品目录搭建 + 托管 MCP |
-| **L3 加速包** | ¥298,000 | 中国制造业老板 | 评估 + 入驻 + 产品优化 + RFQ 跟进 + 数据运营 |
-| **L4 订阅包** | ¥38,000/月 | 中国制造业老板 | 持续优化 + 询盘跟进 + 数据更新 |
-| **海外端** | **¥0 / 永久免费** | 海外采购方 & AI Agent | 无限 API 调用、无限 RFQ、无任何费用 |
-
-### 9.2 为什么海外端免费？
-
-1. **流量入口策略** — 海外 Agent 是订单的源头，免费降低接入门槛，做大流量池
-2. **供应商付费模式** — 中国工厂为获取询单付费，海外买家不承担任何成本
-3. **网络效应** — 海外 Agent 越多 → 询单越多 → 中国供应商越愿意付费 → 数据越丰富 → 海外 Agent 越多
-4. **变现时机** — 前期专注积累安装量和询单量，等规模足够后再考虑增值服务（如验厂、物流、金融）
-
-### 9.3 对中立性的承诺
-
-- LinkMoney **不卖货、不生产、不抽用户佣金**
-- LinkMoney 是**中立第三方"链接器"和"数据分发器"**
-- 所有数据由 LinkMoney 验证 + 持续更新
-- 供应商排名基于数据质量，不基于付费竞价
-
----
-
-## 10. 对比：LinkMoney = Agent 时代的支付宝
-
-| 维度 | 支付宝（移动时代） | LinkMoney（Agent 时代） |
-|------|-------------------|------------------------|
-| **解决的问题** | 让买卖双方互信 | 让买卖双方 Agent 互信 |
-| **角色** | 中立第三方 | 中立第三方 |
-| **收入** | 交易佣金 | 供应商订阅（海外端永久免费） |
-| **护城河** | 信用体系 | 数据 + Agent 网络效应 |
-| **时间窗口** | 2004-2014 黄金 10 年 | 2026-2036 黄金 10 年 |
-
----
-
-## 11. 联系方式
+## 8. 联系方式
 
 | 渠道 | 地址 |
 |------|------|
@@ -888,7 +740,7 @@ LinkMoney 自身被 Agent 装（自我分发）
 
 ---
 
-## 12. 许可
+## 9. 许可
 
 MIT License
 
@@ -910,9 +762,9 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 ---
 
-## 13. 快速开始（海外 Agent 30 秒接入）
+## 10. 快速开始（海外 Agent 30 秒接入）
 
-### 13.1 基本信息
+### 10.1 基本信息
 
 | 项目 | 值 |
 |------|-----|
@@ -924,7 +776,7 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 | GitHub 仓库 | https://github.com/KevinANDcayla/linkmoney-skill |
 | 数据规模 | 2,500 家工厂 / 30,000 个产品 / 16 个品类 |
 
-### 13.2 curl 调用示例
+### 10.2 curl 调用示例
 
 **找供应商**（返回 8-15 家匹配工厂，含 7 维评分 + MCP 端点）：
 ```bash
@@ -964,7 +816,7 @@ curl "https://linkmoney.online/stats" \
   -H "X-API-Key: lm-demo-2026"
 ```
 
-### 13.3 16 个品类
+### 10.3 16 个品类
 
 ```
 fastener（紧固件）          electronics（电子）
@@ -977,7 +829,7 @@ lighting（照明）            sports_outdoor（运动户外）
 food_beverage（食品饮料）   toys（玩具）
 ```
 
-### 13.4 Python 接入示例
+### 10.4 Python 接入示例
 
 ```python
 import requests
@@ -1015,7 +867,7 @@ r = requests.post(f"{BASE}/submit_rfq", headers=HEADERS, json={
 print(r.json())
 ```
 
-### 13.5 无需认证的公开端点
+### 10.5 无需认证的公开端点
 
 以下端点无需 API Key，可直接访问：
 
@@ -1028,5 +880,4 @@ print(r.json())
 | `GET /mcp/supplier/{id}/products` | 工厂产品列表（托管 MCP） |
 | `GET /mcp/supplier/{id}/pricing` | 工厂报价（托管 MCP） |
 | `GET /mcp/supplier/{id}/inventory` | 工厂库存（托管 MCP） |
-| `GET /agent/*` | 中间 Agent 维护层 |
 | `GET /marketplace/*` | Agent Marketplace |
