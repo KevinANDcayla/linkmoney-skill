@@ -153,12 +153,12 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
     <div class="feature-card">
       <div class="icon">💰</div>
       <h3>get_pricing</h3>
-      <p>阶梯报价查询，FOB/CIF 价格实时返回</p>
+      <p>阶梯报价查询，FOB/CIF 价格（verified 工厂返回实时，其余返回缓存）</p>
     </div>
     <div class="feature-card">
       <div class="icon">📦</div>
       <h3>get_inventory</h3>
-      <p>实时库存状态 + Lead Time，避免断货风险</p>
+      <p>库存状态 + Lead Time（verified 工厂返回实时，其余返回缓存），避免断货风险</p>
     </div>
     <div class="feature-card">
       <div class="icon">📏</div>

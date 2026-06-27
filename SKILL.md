@@ -4,7 +4,7 @@ description: |
   LinkMoney（连钱）—— Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商。
 
   【C 端（中国制造业老板侧）】 5 维 AI 出海 Agent 化评估 + 一键注册入驻（托管 MCP，零部署）+ 对话式产品管理
-  【W 端（海外采购方侧）】 一键找 2500 家中国工厂（16 品类：紧固件/电子/纺织/包装/机械/五金/注塑/汽配/家具/建材/化工/医疗/照明/运动/食品/玩具），查实时价格库存，5 秒发 RFQ。
+  【W 端（海外采购方侧）】 一键找中国工厂（73 家 verified + 2700 家目录缓存，16 品类：紧固件/电子/纺织/包装/机械/五金/注塑/汽配/家具/建材/化工/医疗/照明/运动/食品/玩具），查价格库存，5 秒发 RFQ。
   【Agent Marketplace】 公开 RFQ 市场、多供应商竞价对比、9 阶段执行仪表盘、公正 Agent 审计记录（含哈希指纹）
   【LLM 辅助层】 火山引擎豆包模型集成（国内云服务，数据不出境），用于多语言翻译、RFQ 解析、工厂数据提取；未配置 API Key 时自动降级为规则引擎，不影响核心功能
 
@@ -109,7 +109,7 @@ curl "https://linkmoney.online/find_china_supplier?category=fastener&spec=M10%20
 | 工具 | 端点 | 参数 | 用途 |
 |------|------|------|------|
 | `get_pricing` | `GET /get_pricing` | `supplier_id`, `sku`, `quantity` | 查阶梯报价 |
-| `get_inventory` | `GET /get_inventory` | `supplier_id`, `sku` | 查实时库存 |
+| `get_inventory` | `GET /get_inventory` | `supplier_id`, `sku` | 查库存（verified 工厂返回实时，其余返回缓存） |
 | `submit_rfq` | `POST /submit_rfq` | `supplier_id`, `product_sku`, `quantity`, `delivery_port` | 提交询价单 |
 | `get_supplier_contact` | `GET /get_supplier_contact` | `supplier_id` | 获取联系方式 |
 | `download_cert` | `GET /download_cert` | `supplier_id`, `cert_type` | 下载认证证书 |
@@ -263,9 +263,9 @@ export LLM_ENABLED=false
     每家工厂含：name_en, match_score, moq, products
 
 [3] Agent 调用 get_pricing / get_inventory（发往 linkmoney.online）：
-    LinkMoney 后端优先返回缓存数据
-    若用户明确需要实时数据，LinkMoney 后端代理调用厂家 MCP（Agent 不直连）
-    所有外部响应经强类型验证和清洗后返回 Agent
+    LinkMoney 后端优先返回缓存数据（每条标注 data_source: cache）
+    仅 verified 工厂支持实时查询，LinkMoney 后端代理调用厂家 MCP（Agent 不直连）
+    所有外部响应经强类型验证和清洗后返回 Agent（标注 data_source: live）
 
 [4] 采购方决策 → Agent 调用 submit_rfq（发往 linkmoney.online）：
     RFQ 存入 LinkMoney 中央库 → 邮件通知厂家 → 厂家通过 send_quote 报价 → 成交
@@ -396,20 +396,26 @@ export LLM_ENABLED=false
 
 ## 4. 数据来源与架构
 
-| 数据层 | 存储位置 | 更新方式 | 实时性 |
-|--------|---------|---------|--------|
-| **供应商档案** | LinkMoney 中央库 | 厂家通过 register_supplier 提交 | 按需更新 |
-| **认证信息** | LinkMoney 中央库 | 厂家上传，定期更新 | 准实时 |
-| **产品目录** | LinkMoney 缓存 + 厂家 MCP | 缓存优先；实时按需代理查询 | 准实时 |
-| **阶梯报价** | LinkMoney 缓存 + 厂家 MCP | 缓存优先；实时按需代理查询 | 准实时 |
-| **库存状态** | LinkMoney 缓存 + 厂家 MCP | 缓存优先；实时按需代理查询 | 准实时 |
+> ⚠️ **数据透明度声明**：LinkMoney 工厂数据分三层：
+> - **verified（73 家）**：通过 register_supplier 注册、已验证联系方式的真实工厂，支持托管 MCP 查询
+> - **hosted（1035 家）**：注册入驻的工厂，数据托管在 LinkMoney
+> - **cached（1667 家）**：公开目录缓存数据，仅作参考，非签约工厂
+> - 默认 `find_china_supplier` 仅返回 verified + hosted；`include_directory=true` 才返回 cached
+
+| 数据层 | 存储位置 | 更新方式 | 数据来源标注 |
+|--------|---------|---------|-------------|
+| **verified 供应商** | LinkMoney 中央库 | 厂家通过 register_supplier 提交 + 验证 | `data_provenance: verified` |
+| **hosted 供应商** | LinkMoney 中央库 | 厂家注册提交 | `data_provenance: hosted` |
+| **cached 目录** | LinkMoney 缓存 | 公开目录爬取，定期更新 | `data_provenance: cached`（非签约） |
+| **产品/报价/库存** | LinkMoney 缓存 | verified 工厂可通过 MCP 查询；其余为缓存档案 | 每条返回 `data_source: cache \| live` |
 | **RFQ 记录** | LinkMoney 中央库 | 每次询盘写入 | 实时 |
 
 > **混合架构核心原则**：
-> - **优先缓存**：Agent 查询时，LinkMoney 优先返回中心化缓存数据，减少外部调用
-> - **实时按需**：仅当用户明确表达实时查询意图（如确认采购、提交 RFQ）时，LinkMoney 后端代理调用厂家 MCP 获取实时数据
+> - **缓存优先**：Agent 查询时，LinkMoney 优先返回中心化缓存数据，减少外部调用
+> - **verified 实时查询**：仅 verified 工厂支持 MCP 实时查询，且需用户明确表达实时意图（如确认采购、提交 RFQ）
 > - **安全代理**：Agent 不直接调用厂家 MCP，所有外部交互由 LinkMoney 后端代理完成
 > - **数据告知**：用户提交 RFQ 时，系统明确告知数据将被发送至对应供应商
+> - **来源透明**：每条返回数据标注 `data_provenance`（verified \| hosted \| cached）和 `data_source`（cache \| live）
 
 ---
 
@@ -434,7 +440,7 @@ LinkMoney 对厂家 MCP 端点实施严格的准入审核：
 | 操作 | 数据流向 | 风险等级 | 说明 |
 |------|---------|---------|------|
 | `find_china_supplier` / `get_pricing` / `get_inventory` 查询 | LinkMoney 中心化缓存 → 用户 | 🟢 低 | 数据不流出 LinkMoney 平台 |
-| 实时数据查询（用户明确要求时） | LinkMoney → 厂家 MCP 端点 | 🟡 中 | 用户的产品规格、数量等查询参数发送至对应厂家服务器 |
+| verified 工厂实时查询（用户明确要求时） | LinkMoney → 厂家 MCP 端点 | 🟡 中 | 仅 verified 工厂支持；用户的产品规格、数量等查询参数发送至对应厂家服务器 |
 | `submit_rfq` | 用户 → LinkMoney → 指定供应商 | 🟡 中 | **用户提交 RFQ 前需通过 `confirm_data_sharing=true` 参数明确确认数据将发送给指定供应商**。供应商身份在 RFQ 提交前已明确展示。支持 `anonymize_contact=true` 匿名化联系方式（通过 LinkMoney 平台中转，供应商无法看到买家真实邮箱） |
 | `register_supplier` | 厂家 → LinkMoney 中央库 | 🟡 中 | 厂家提交的联系方式、产品数据存储在 LinkMoney 中央库，对海外采购方公开（联系方式仅在主动查询时返回） |
 | LLM 辅助功能 | 用户文本 → 火山引擎 ARK API (ark.cn-beijing.volces.com) | 🟢 低 | **多语言翻译、RFQ 解析等 LLM 功能使用火山引擎豆包模型（国内云服务，数据不出境）**。未配置 `ARK_API_KEY` 时自动降级为规则引擎，不发送任何数据。对返回 JSON 实施严格验证（键名白名单+深度限制+大小限制） |
@@ -774,7 +780,7 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 | 限流 | 30 次/分钟 |
 | MCP Manifest | `https://linkmoney.online/mcp/manifest.json`（无需认证） |
 | GitHub 仓库 | https://github.com/KevinANDcayla/linkmoney-skill |
-| 数据规模 | 2,500 家工厂 / 30,000 个产品 / 16 个品类 |
+| 数据规模 | 73 家 verified + 2700 家目录缓存 / 16 个品类 |
 
 ### 10.2 curl 调用示例
 
@@ -784,7 +790,7 @@ curl "https://linkmoney.online/find_china_supplier?category=fastener&spec=M8%203
   -H "X-API-Key: lm-demo-2026"
 ```
 
-**查实时报价**（阶梯报价，量大优惠）：
+**查报价**（阶梯报价，量大优惠；verified 工厂返回实时，其余返回缓存）：
 ```bash
 curl "https://linkmoney.online/get_pricing?supplier_id=hd-fastener-0001&sku=HEX-BOLT-M8-DIN933-88FD13&quantity=50000" \
   -H "X-API-Key: lm-demo-2026"

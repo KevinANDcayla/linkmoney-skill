@@ -1468,8 +1468,8 @@ def mcp_manifest():
         # fallback to minimal manifest
         return {
             "name": "linkmoney",
-            "version": "5.0.3",
-            "description": "LinkMoney — B2B Trade Connector for AI Agents. 2500 factories, 30000 products, 16 categories. API Key: lm-demo-2026",
+            "version": "5.2.1",
+            "description": "LinkMoney — B2B Trade Connector for AI Agents. 73 verified + 2700 directory listings, 16 categories. API Key: lm-demo-2026",
             "api_key": "lm-demo-2026",
             "api_key_header": "X-API-Key",
             "base_url": "https://linkmoney.online",
@@ -1603,12 +1603,19 @@ def find_china_supplier(
     quantity: int = Query(0, description="采购数量"),
     target_price: str = Query("", description="目标价格（如 0.15 USD）"),
     port: str = Query("", description="指定 FOB 港口（如 Ningbo/Shanghai/Shenzhen），优先返回该港口附近供应商"),
+    include_directory: bool = Query(False, description="是否包含 cached 目录数据（非签约工厂）。默认 false 只返回 verified+hosted"),
 ):
     """
     海外采购方找中国供应商（混合架构，v4.0 多维加权评分）
     输入：品类 + 规格 + 数量 + 目标价 + 港口（可选）
     输出：8-15 家工厂比价 + 推荐方案（评分 ≥ 60 的全部返回）
-    已装 Skill 的厂家返回 mcp_endpoint，Agent 应直连厂家 MCP 获取实时报价/库存
+    已装 Skill 的 verified 厂家返回 mcp_endpoint，支持实时报价/库存查询
+
+    v5.2.1 数据透明度：
+    - 默认只返回 verified + hosted 工厂（data_provenance 标注）
+    - include_directory=true 才返回 cached 目录数据（非签约）
+    - 每条结果标注 data_provenance: verified | hosted | cached
+    - 每条结果标注 data_source: live | cache（live 仅 verified 工厂）
 
     v4.0 修复：
     - 7 维加权评分（品类/spec/MOQ/价格/认证/地理/Skill 在线）
@@ -1617,17 +1624,24 @@ def find_china_supplier(
     - 修复缓存写入死代码
     - v5.0.5: 支持 port 参数，港口匹配加分；spec 匹配优先产品名
     """
-    # 缓存检查（缓存 key 包含 target_price + port）
-    cache_key = f"find:{category}:{spec}:{quantity}:{target_price}:{port}"
+    # 缓存检查（缓存 key 包含 target_price + port + include_directory）
+    cache_key = f"find:{category}:{spec}:{quantity}:{target_price}:{port}:{include_directory}"
     cached = _supplier_cache.get(cache_key)
     if cached:
         return cached
 
     # 一次性查询所有供应商 + 产品（修复 N+1 查询）
+    # v5.2.1: 默认过滤掉 cached 目录数据（非签约），仅 include_directory=true 时包含
     with get_db() as conn:
-        supplier_rows = conn.execute(
-            "SELECT * FROM suppliers WHERE category = ?", (category,)
-        ).fetchall()
+        if include_directory:
+            supplier_rows = conn.execute(
+                "SELECT * FROM suppliers WHERE category = ?", (category,)
+            ).fetchall()
+        else:
+            supplier_rows = conn.execute(
+                "SELECT * FROM suppliers WHERE category = ? AND data_source_type IN ('verified', 'hosted')",
+                (category,),
+            ).fetchall()
         if supplier_rows:
             supplier_ids = [row["id"] for row in supplier_rows]
             placeholders = ",".join("?" * len(supplier_ids))
@@ -1854,15 +1868,16 @@ def find_china_supplier(
             "sample_products": sample_products,
             # ===== 混合架构关键字段 =====
             "mcp_endpoint": s.get("skill_mcp_endpoint", "") if s["agent_skill_installed"] else "",
-            "data_source": "live" if (s["agent_skill_installed"] and s.get("skill_mcp_endpoint")) else "cached",
+            "data_provenance": s.get("data_source_type", "cached"),  # v5.2.1: verified | hosted | cached
+            "data_source": "live" if (s["agent_skill_installed"] and s.get("skill_mcp_endpoint") and s.get("data_source_type") == "verified") else "cache",
             "next_action": {
-                "description": f"调用 {s['name_zh']} 的 MCP Server 获取实时报价和库存",
+                "description": f"调用 {s['name_zh']} 的 MCP Server 获取报价和库存（verified 工厂支持实时查询）",
                 "endpoint": s.get("skill_mcp_endpoint", ""),
                 "pricing_url": f"{s.get('skill_mcp_endpoint', '').rstrip('/')}/pricing?sku={{sku}}&quantity={quantity}" if s["agent_skill_installed"] and s.get("skill_mcp_endpoint") else "",
                 "inventory_url": f"{s.get('skill_mcp_endpoint', '').rstrip('/')}/inventory?sku={{sku}}" if s["agent_skill_installed"] and s.get("skill_mcp_endpoint") else "",
                 "products_url": f"{s.get('skill_mcp_endpoint', '').rstrip('/')}/products" if s["agent_skill_installed"] and s.get("skill_mcp_endpoint") else "",
             } if s["agent_skill_installed"] and s.get("skill_mcp_endpoint") else {
-                "description": "供应商未安装 LinkMoney Skill，无法获取实时数据。请使用 LinkMoney 缓存数据或引导供应商安装 Skill。",
+                "description": "供应商未安装 LinkMoney Skill，返回 LinkMoney 缓存数据。verified 工厂安装 Skill 后支持实时查询。",
                 "action": "invite_supplier_to_install_skill",
             },
             "contact": {
@@ -1898,10 +1913,10 @@ def find_china_supplier(
         # Agent 操作指引
         "agent_workflow": {
             "step_1": f"从 {len(top_matches)} 家匹配厂家中，选择 {min(skilled_count, 3) if skilled_count > 0 else 2} 家进一步询价",
-            "step_2": f"有 Skill 的 {skilled_count} 家 → 调用其 mcp_endpoint 获取实时报价/库存（数据实时准确）",
+            "step_2": f"有 Skill 的 {skilled_count} 家 → 调用其 mcp_endpoint 获取报价/库存（verified 工厂返回实时数据）",
             "step_3": f"无 Skill 的 {len(top_matches) - skilled_count} 家 → 调用 LinkMoney get_pricing/get_inventory（缓存数据）",
             "step_4": "对比报价后，调用 submit_rfq 提交正式询盘给最优供应商",
-            "note": "优先使用厂家自有 MCP 端点获取实时数据。厂家 MCP 不在线时会自动 fallback 到 LinkMoney 缓存。",
+            "note": "每条结果标注 data_provenance (verified|hosted|cached) 和 data_source (live|cache)。verified 工厂支持 MCP 实时查询，其余返回缓存档案。",
         },
         "live_suppliers": skilled_count,
         "cached_suppliers": len(top_matches) - skilled_count,
