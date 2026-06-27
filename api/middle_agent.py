@@ -12,6 +12,7 @@ LinkMoney 中间 Agent 维护层（v3.0）
 """
 import asyncio
 import json
+import logging
 import time
 import uuid
 import threading
@@ -23,6 +24,9 @@ from urllib.parse import urljoin
 
 import requests
 
+# Fallback logger：当 server.py 未注入 logger 时使用（独立 import / 单元测试场景）
+logger = logging.getLogger("linkmoney.middle_agent")
+
 
 def _db():
     """延迟获取 server.get_db，避开与 server.py 的循环导入。"""
@@ -31,8 +35,11 @@ def _db():
 
 
 def _log():
-    import server
-    return server.logger
+    try:
+        import server
+        return server.logger
+    except Exception:
+        return logger
 
 
 # ===== Agent 元数据 =====
@@ -100,40 +107,44 @@ def _record_circuit_success(endpoint: str):
 # ===== 供应商端点白名单机制 =====
 
 # 允许的供应商 MCP 端点域名后缀白名单
-# 仅 LinkMoney 托管端点和已审核的自部署端点可发起健康检查
+# v5.2.1: 仅 LinkMoney 官方托管端点（移除 localhost/127.0.0.1，避免本地服务探测）
 _SUPPLIER_ENDPOINT_WHITELIST = [
     "linkmoney.online",       # LinkMoney 官方托管端点
     "linkmoney.online:8765",  # 含端口
-    "localhost",              # 本地开发环境
-    "127.0.0.1",              # 本地开发环境
 ]
-
-# 是否启用端点白名单严格模式（true=仅白名单内端点可检查，false=记录警告但仍检查）
-_ENDPOINT_STRICT_MODE = True
 
 
 def _is_endpoint_allowed(endpoint: str) -> bool:
     """
     检查供应商 MCP 端点是否在白名单内。
 
-    安全措施：
-    - 仅允许预审核的域名后缀
-    - 阻止未知外部域名的健康检查请求
-    - 严格模式下拒绝非白名单端点
+    v5.2.1 安全措施（强制严格模式，无 bypass 分支）：
+    - 仅允许预审核的 linkmoney.online 域名
+    - 阻止任何未知外部域名（含 localhost/内网 IP）的健康检查请求
+    - 无非严格模式 bypass，杜绝审核旁路
     """
     if not endpoint:
         return False
 
-    # 提取域名（去掉 https:// 和路径）
+    # 拒绝本地/内网地址（防止 SSRF 与本地服务探测）
+    from urllib.parse import urlparse
     try:
-        from urllib.parse import urlparse
         parsed = urlparse(endpoint)
-        host = parsed.hostname or ""
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return False
+        if host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+            return False
+        if host.startswith(("10.", "172.16.", "172.17.", "172.18.", "172.19.",
+                            "172.20.", "172.21.", "172.22.", "172.23.", "172.24.",
+                            "172.25.", "172.26.", "172.27.", "172.28.", "172.29.",
+                            "172.30.", "172.31.", "192.168.")):
+            return False
+
         port = parsed.port
-        # 构造 host:port 形式用于匹配
         host_with_port = f"{host}:{port}" if port else host
 
-        # 检查白名单
+        # 严格白名单匹配
         for allowed in _SUPPLIER_ENDPOINT_WHITELIST:
             if host == allowed or host_with_port == allowed:
                 return True
@@ -141,12 +152,8 @@ def _is_endpoint_allowed(endpoint: str) -> bool:
             if host.endswith("." + allowed):
                 return True
 
-        if _ENDPOINT_STRICT_MODE:
-            logger.warning(f"Endpoint not in whitelist (strict mode): {endpoint}")
-            return False
-        else:
-            logger.warning(f"Endpoint not in whitelist (non-strict, allowing): {endpoint}")
-            return True
+        logger.warning(f"[ENDPOINT_BLOCKED] {endpoint} not in strict whitelist")
+        return False
     except Exception:
         return False
 
@@ -178,46 +185,94 @@ _MANIFEST_MAX_TOTAL_SIZE = 100 * 1024  # 100KB
 _MANIFEST_ALLOWED_TYPES = (str, int, float, bool, list, dict, type(None))
 
 
-def _validate_manifest(data: Any, depth: int = 0, max_depth: int = 3) -> bool:
+def _validate_manifest(data: Any, depth: int = 0, max_depth: int = 3, _path: str = "") -> bool:
     """
     严格验证从外部供应商 MCP 端点获取的 manifest.json 数据。
 
-    安全措施：
+    v5.2.1 安全措施（针对虾评 HIGH 供应链风险加固）：
     - 字段白名单：仅允许预定义字段，拒绝未知字段
     - 深度限制：解析深度 ≤ 3 层，防止嵌套注入
     - 长度限制：单字段 ≤ 10KB，总响应 ≤ 100KB
-    - 类型白名单：仅允许基本 JSON 类型，拒绝函数字符串
+    - 类型白名单：仅允许基本 JSON 类型
+    - 结构强制：顶层 tools 字段必须是 list 且元素必须是 dict（防止畸形结构绕过）
+    - 详细审计日志：每次失败记录路径与原因，便于安全追踪
     """
     if depth > max_depth:
+        logger.warning(f"[MANIFEST_REJECT] depth exceeded path={_path} depth={depth}")
         return False
 
     if not isinstance(data, _MANIFEST_ALLOWED_TYPES):
+        logger.warning(f"[MANIFEST_REJECT] type not allowed path={_path} type={type(data).__name__}")
         return False
 
     if isinstance(data, str):
-        return len(data.encode("utf-8")) <= _MANIFEST_MAX_FIELD_SIZE
+        if len(data.encode("utf-8")) > _MANIFEST_MAX_FIELD_SIZE:
+            logger.warning(f"[MANIFEST_REJECT] string too long path={_path}")
+            return False
+        return True
 
     if isinstance(data, dict):
         # 检查字段白名单（仅顶层 dict 检查字段名）
         if depth == 0:
             for key in data:
                 if key not in _MANIFEST_ALLOWED_FIELDS:
+                    logger.warning(f"[MANIFEST_REJECT] unknown field path={_path}.{key}")
                     return False
+            # v5.2.1: tools 字段结构强制 — 必须是 list，且每个元素必须是 dict
+            if "tools" in data:
+                tools = data["tools"]
+                if not isinstance(tools, list):
+                    logger.warning(f"[MANIFEST_REJECT] tools must be list, got {type(tools).__name__}")
+                    return False
+                if len(tools) > 100:
+                    logger.warning(f"[MANIFEST_REJECT] tools list too long: {len(tools)}")
+                    return False
+                for i, tool in enumerate(tools):
+                    if not isinstance(tool, dict):
+                        logger.warning(f"[MANIFEST_REJECT] tools[{i}] must be dict, got {type(tool).__name__}")
+                        return False
         # 递归检查值
         for key, val in data.items():
-            if not _validate_manifest(val, depth + 1, max_depth):
+            if not _validate_manifest(val, depth + 1, max_depth, f"{_path}.{key}"):
                 return False
         return True
 
     if isinstance(data, list):
         if len(data) > 100:  # 列表长度限制
+            logger.warning(f"[MANIFEST_REJECT] list too long path={_path} len={len(data)}")
             return False
-        for item in data:
-            if not _validate_manifest(item, depth + 1, max_depth):
+        for i, item in enumerate(data):
+            if not _validate_manifest(item, depth + 1, max_depth, f"{_path}[{i}]"):
                 return False
         return True
 
     return True
+
+
+def _safe_parse_manifest(raw_text: str) -> Optional[Any]:
+    """
+    v5.2.1: JSON 解析前的语法预检 + 沙箱化解析。
+
+    - 限制原始文本长度（防内存炸弹）
+    - 用 raw_decode 检查首个 JSON 对象后是否还有非空白字符（防追加注入）
+    - 失败返回 None，不抛异常
+    """
+    if not raw_text:
+        return None
+    if len(raw_text.encode("utf-8")) > _MANIFEST_MAX_TOTAL_SIZE:
+        logger.warning(f"[MANIFEST_REJECT] raw payload too large: {len(raw_text)} bytes")
+        return None
+    import json as _json
+    try:
+        obj, end = _json.JSONDecoder().raw_decode(raw_text)
+        # 检查首个 JSON 对象后是否还有非空白字符（防追加注入）
+        if raw_text[end:].strip():
+            logger.warning("[MANIFEST_REJECT] trailing content after JSON object")
+            return None
+        return obj
+    except _json.JSONDecodeError as e:
+        logger.warning(f"[MANIFEST_REJECT] JSON syntax error: {str(e)[:120]}")
+        return None
 
 
 async def _check_one_supplier(sess: requests.Session, supplier: dict) -> dict:
@@ -282,9 +337,11 @@ async def _check_one_supplier(sess: requests.Session, supplier: dict) -> dict:
                     "checked_at": datetime.now().isoformat(timespec="seconds"),
                     "note": f"manifest.json 超过大小限制 ({content_length} > {_MANIFEST_MAX_TOTAL_SIZE} bytes)",
                 }
-            # 解析 JSON 并严格验证
+            # 解析 JSON 并严格验证（v5.2.1: 沙箱化解析）
             try:
-                manifest_data = r.json()
+                manifest_data = _safe_parse_manifest(r.text)
+                if manifest_data is None:
+                    raise ValueError("manifest parse failed")
             except Exception:
                 _log_health_check(sid, endpoint, "degraded", latency, "JSON parse failed")
                 _record_circuit_failure(endpoint)
@@ -295,7 +352,7 @@ async def _check_one_supplier(sess: requests.Session, supplier: dict) -> dict:
                     "status": "degraded",
                     "latency_ms": latency,
                     "checked_at": datetime.now().isoformat(timespec="seconds"),
-                    "note": "manifest.json JSON 解析失败",
+                    "note": "manifest.json JSON 解析失败（沙箱预检拒绝）",
                 }
 
             # 安全验证：字段白名单 + 深度限制 + 类型检查
@@ -479,7 +536,9 @@ def _check_one_supplier_sync(sess: requests.Session, supplier: dict) -> dict:
             }
 
         try:
-            payload = r.json()
+            payload = _safe_parse_manifest(r.text)
+            if payload is None:
+                raise ValueError("manifest parse failed")
         except Exception:  # noqa: BLE001
             payload = {}
             _record_circuit_failure(endpoint)
@@ -492,7 +551,7 @@ def _check_one_supplier_sync(sess: requests.Session, supplier: dict) -> dict:
                 "latency_ms": latency,
                 "checked_at": datetime.now().isoformat(timespec="seconds"),
                 "http_status": r.status_code,
-                "note": "JSON 解析失败",
+                "note": "JSON 解析失败（沙箱预检拒绝）",
             }
 
         # v5.2: manifest 字段白名单 + 深度 + 类型校验

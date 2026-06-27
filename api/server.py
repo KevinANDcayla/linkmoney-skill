@@ -5692,7 +5692,7 @@ def leave_review(req: LeaveReviewRequest):
 @app.get("/health")
 def health_check():
     """简单健康检查端点（供 Docker healthcheck / 外部监控使用）"""
-    return {"status": "ok", "service": "linkmoney-api", "version": "5.2.0"}
+    return {"status": "ok", "service": "linkmoney-api", "version": "5.2.1"}
 
 
 # ===== 轻量访问统计 =====

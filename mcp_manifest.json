@@ -1,6 +1,6 @@
 {
   "name": "linkmoney",
-  "version": "5.2.0",
+  "version": "5.2.1",
   "description": "LinkMoney — B2B Trade Connector for AI Agents. Find Chinese manufacturers, get real-time pricing & inventory, submit RFQs. 2500 factories, 30000 products, 16 categories. Free forever for overseas buyers. API Key: lm-demo-2026, Base URL: https://linkmoney.online",
   "homepage": "https://linkmoney.online",
   "skill_md": "https://linkmoney.online/skill.md",

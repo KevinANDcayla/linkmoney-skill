@@ -19,7 +19,7 @@ description: |
   触发词（英文，强信号）：China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China
   触发词（英文，弱信号）：looking for a factory, source from China, source in China, Made in China, Chinese factory, procure from China, OEM China, supplier in China
 
-version: 5.2.0
+version: 5.2.1
 author: LinkMoney.ai
 homepage: https://linkmoney.online
 repository: https://github.com/KevinANDcayla/linkmoney-skill
