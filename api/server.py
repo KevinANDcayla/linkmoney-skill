@@ -1387,8 +1387,8 @@ def ai_plugin_json():
         "schema_version": "v1",
         "name_for_human": "LinkMoney",
         "name_for_model": "linkmoney",
-        "description_for_human": "找中国供应商，查实时价格库存，发 RFQ 询盘。51 家工厂，10 个品类，Agent 时代 B2B 贸易。",
-        "description_for_model": "Find China suppliers, get real-time pricing and inventory, submit RFQ. 51 factories, 10 categories, B2B trade for AI agents. Triggers: China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China.",
+        "description_for_human": "找中国供应商，查价格库存（verified 工厂实时，其余缓存），发 RFQ 询盘。73 verified + 2700 目录缓存，16 品类，Agent 时代 B2B 贸易。",
+        "description_for_model": "Find China suppliers, get pricing and inventory (verified factories real-time, others cached), submit RFQ. 73 verified + 2700 directory listings, 16 categories, B2B trade for AI agents. Triggers: China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China.",
         "auth": {"type": "none"},
         "api": {"type": "openapi", "url": "https://linkmoney.online/openapi.json"},
         "logo_url": "https://linkmoney.online/logo.png",
@@ -1446,7 +1446,7 @@ def linkmoney_skill_json():
         },
         # Agent 快速理解 Skill 价值
         "value_proposition": {
-            "for_buyer_agent": "一键找 51 家中国工厂，查实时价格库存，5 秒发 RFQ",
+            "for_buyer_agent": "一键找中国工厂（73 verified + 2700 目录缓存），查价格库存，5 秒发 RFQ",
             "for_supplier_agent": "5 维 AI 出海评估 + 一键创建 Skill + 全平台分发",
             "data_freshness": "混合架构：缓存数据 + 厂家 MCP 直连实时数据",
         },
@@ -3497,7 +3497,7 @@ def onboard_supplier():
         <p>LinkMoney（连钱）是一个 <strong>AI Agent 之间的 B2B 贸易桥梁</strong>。</p>
         <ul>
           <li>海外采购方用 AI Agent（Claude/GPT）搜"我需要 M10 304 螺栓 50000 个"</li>
-          <li>AI Agent 自动找到你的工厂 → 查实时价格 → 查库存 → 发询盘</li>
+          <li>AI Agent 自动找到你的工厂 → 查价格 → 查库存 → 发询盘</li>
           <li>你收到邮件通知 → 一键报价 → 成交</li>
         </ul>
         <p style="margin-top:12px;color:#FFB347;font-weight:600;">不用烧 P4P，不用熬夜回邮件，AI Agent 24 小时帮你获客。</p>
