@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LinkMoney — Connect Your AI Agent to 200+ Chinese Manufacturers</title>
+<meta name="description" content="The B2B trade connector for the Agent era. Let your AI agent find reliable Chinese suppliers, get real-time pricing, and submit RFQs in seconds.">
+<style>
+  :root {
+    --blue: #0066FF;
+    --gold: #FFB800;
+    --dark: #0A0E27;
+    --gray: #F5F7FA;
+    --green: #10B981;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: var(--dark); background: #fff; line-height: 1.6; }
+
+  .hero {
+    background: linear-gradient(135deg, var(--dark) 0%, #1a1f4a 100%);
+    color: #fff;
+    padding: 100px 24px 80px;
+    text-align: center;
+  }
+  .hero h1 { font-size: 52px; font-weight: 800; margin-bottom: 16px; line-height: 1.15; }
+  .hero h1 span.gold { color: var(--gold); }
+  .hero .subtitle { font-size: 20px; color: rgba(255,255,255,0.85); margin-bottom: 32px; max-width: 680px; margin-left: auto; margin-right: auto; }
+  .hero .cta { display: inline-flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .btn { padding: 14px 32px; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; transition: all 0.2s; }
+  .btn-blue { background: var(--blue); color: #fff; border: none; }
+  .btn-blue:hover { background: #0052cc; }
+  .btn-outline { background: transparent; color: #fff; border: 2px solid rgba(255,255,255,0.3); }
+  .btn-outline:hover { border-color: var(--gold); color: var(--gold); }
+  .btn-gold { background: var(--gold); color: var(--dark); border: none; font-size: 18px; padding: 16px 40px; }
+  .btn-gold:hover { background: #e6a600; }
+
+  /* Stats bar */
+  .stats-bar {
+    background: #fff;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 32px 24px;
+  }
+  .stats-grid {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+    text-align: center;
+  }
+  @media (max-width: 768px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stat .num { font-size: 36px; font-weight: 800; color: var(--blue); }
+  .stat .label { font-size: 14px; color: #666; margin-top: 4px; }
+
+  .section { max-width: 1100px; margin: 0 auto; padding: 80px 24px; }
+  .section h2 { font-size: 32px; font-weight: 700; text-align: center; margin-bottom: 16px; }
+  .section h2 span { color: var(--blue); }
+  .section .lead { text-align: center; color: #666; max-width: 600px; margin: 0 auto 48px; font-size: 17px; }
+
+  /* Flow diagram */
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    align-items: stretch;
+    position: relative;
+  }
+  @media (max-width: 768px) { .flow { grid-template-columns: 1fr; } }
+  .flow-step {
+    background: var(--gray);
+    border-radius: 12px;
+    padding: 32px 24px;
+    position: relative;
+    border-top: 4px solid var(--blue);
+  }
+  .flow-step .step-num {
+    position: absolute;
+    top: -16px;
+    left: 24px;
+    width: 32px;
+    height: 32px;
+    background: var(--blue);
+    color: #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .flow-step h3 { font-size: 18px; margin-bottom: 8px; margin-top: 8px; }
+  .flow-step .tool-name { font-family: 'SF Mono', Menlo, monospace; color: var(--blue); font-size: 13px; background: rgba(0,102,255,0.08); padding: 2px 8px; border-radius: 4px; display: inline-block; margin-bottom: 12px; }
+  .flow-step p { color: #555; font-size: 14px; margin-bottom: 12px; }
+  .flow-step .arrow { text-align: right; font-size: 24px; color: var(--blue); }
+  @media (max-width: 768px) { .flow-step .arrow { display: none; } }
+
+  /* Code block */
+  .code-block {
+    background: var(--dark);
+    color: #e5e7eb;
+    border-radius: 12px;
+    padding: 24px;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    overflow-x: auto;
+    text-align: left;
+  }
+  .code-block .cmt { color: #6b7280; }
+  .code-block .key { color: #FFB800; }
+  .code-block .str { color: #4ADE80; }
+  .code-block .url { color: #60A5FA; }
+
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
+  .feature-card { background: var(--gray); border-radius: 12px; padding: 28px; transition: transform 0.2s; }
+  .feature-card:hover { transform: translateY(-4px); }
+  .feature-card .icon { font-size: 32px; margin-bottom: 12px; }
+  .feature-card h3 { font-size: 17px; margin-bottom: 6px; font-family: 'SF Mono', Menlo, monospace; color: var(--dark); }
+  .feature-card p { color: #666; font-size: 14px; }
+
+  .install-block { background: linear-gradient(135deg, #1a1f4a 0%, #0A0E27 100%); color: #fff; border-radius: 12px; padding: 24px; margin-top: 16px; overflow-x: auto; }
+  .install-block code { color: var(--gold); font-size: 14px; word-break: break-all; }
+
+  .pricing { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px; }
+  .price-card { background: #fff; border: 2px solid #e5e7eb; border-radius: 12px; padding: 32px; text-align: center; transition: all 0.2s; }
+  .price-card:hover { border-color: var(--blue); }
+  .price-card.featured { border-color: var(--gold); background: #fffdf5; }
+  .price-card .plan { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .price-card .amount { font-size: 36px; font-weight: 800; color: var(--blue); margin: 16px 0 8px; }
+  .price-card.featured .amount { color: var(--gold); }
+  .price-card .desc { color: #666; font-size: 14px; margin-bottom: 16px; min-height: 48px; }
+  .price-card ul { list-style: none; text-align: left; margin: 16px 0; }
+  .price-card ul li { padding: 6px 0; padding-left: 24px; position: relative; color: #555; font-size: 14px; }
+  .price-card ul li::before { content: '✓'; position: absolute; left: 0; color: var(--green); font-weight: bold; }
+
+  footer { background: var(--dark); color: rgba(255,255,255,0.6); padding: 48px 24px; text-align: center; font-size: 14px; }
+  footer a { color: var(--gold); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  .brand-symbol { font-size: 120px; text-align: center; color: var(--blue); opacity: 0.1; margin-bottom: -60px; font-weight: 900; user-select: none; }
+
+  .lang-switch { position: fixed; top: 16px; right: 16px; z-index: 100; background: rgba(255,255,255,0.95); border-radius: 20px; padding: 6px 12px; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+  .lang-switch a { color: var(--blue); text-decoration: none; margin: 0 6px; }
+  .lang-switch a.active { font-weight: 700; color: var(--dark); }
+</style>
+<script>
+// 轻量访问统计（无需第三方服务）
+fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({page:'landing_en', lang:'en'})}).catch(()=>{});
+</script>
+</head>
+<body>
+
+<div class="lang-switch">
+  <a href="/en" class="active">EN</a> · <a href="/zh">中文</a>
+</div>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="brand-symbol">∞</div>
+  <h1>Connect Your AI Agent to<br><span class="gold">2,500+ Chinese Manufacturers</span></h1>
+  <p class="subtitle">LinkMoney is the free B2B trade connector for the Agent era. Let your agent find reliable suppliers, get real-time pricing, and submit RFQs — in one API call. Free forever for overseas buyers.</p>
+  <div class="cta">
+    <a href="#install" class="btn btn-gold">Install Skill — Free</a>
+    <a href="#api" class="btn btn-outline">View API Docs</a>
+  </div>
+  <p style="color: rgba(255,255,255,0.7); font-size: 13px; margin-top: 16px;">No credit card · No trial limit · No usage cap</p>
+</section>
+
+<!-- Stats bar -->
+<section class="stats-bar">
+  <div class="stats-grid">
+    <div class="stat"><div class="num">2,500</div><div class="label">Verified Factories</div></div>
+    <div class="stat"><div class="num">30,000+</div><div class="label">Products Indexed</div></div>
+    <div class="stat"><div class="num">16</div><div class="label">Industry Categories</div></div>
+    <div class="stat"><div class="num">7</div><div class="label">Languages Supported</div></div>
+  </div>
+</section>
+
+<!-- How it works: procurement flow -->
+<section class="section" id="how">
+  <h2>From Search to RFQ in <span>3 API Calls</span></h2>
+  <p class="lead">Replace 30 minutes of manual sourcing with a single agent conversation.</p>
+  <div class="flow">
+    <div class="flow-step">
+      <div class="step-num">1</div>
+      <h3>Find Suppliers</h3>
+      <span class="tool-name">find_china_supplier</span>
+      <p>Search 2,500 verified factories by category, spec, certification, or MOQ. Returns 8–15 ranked matches with 7-dimension scoring.</p>
+      <div class="arrow">→</div>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">2</div>
+      <h3>Get Pricing</h3>
+      <span class="tool-name">get_pricing</span>
+      <p>Real-time tiered FOB/CIF pricing, lead time, and inventory status — no waiting for sales reps.</p>
+      <div class="arrow">→</div>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">3</div>
+      <h3>Submit RFQ</h3>
+      <span class="tool-name">submit_rfq</span>
+      <p>Send your RFQ directly to the factory. Response guaranteed within 5 business days.</p>
+    </div>
+  </div>
+</section>
+
+<!-- API / Skill usage examples -->
+<section class="section" style="background: var(--gray);" id="api">
+  <h2>API <span>Usage Examples</span></h2>
+  <p class="lead">Standard MCP protocol. Works with Claude, ChatGPT, Coze, Qwen, and any MCP-compatible agent.</p>
+
+  <div style="max-width: 820px; margin: 0 auto;">
+    <div class="code-block">
+<span class="cmt"># 1. Register as a buyer (one-time, free)</span>
+<span class="key">POST</span> <span class="url">/mcp/register_buyer</span>
+{
+  <span class="key">"email"</span>: <span class="str">"buyer@acme.com"</span>,
+  <span class="key">"country"</span>: <span class="str">"USA"</span>,
+  <span class="key">"company"</span>: <span class="str">"Acme Industries"</span>
+}
+    </div>
+
+    <div class="code-block" style="margin-top: 16px;">
+<span class="cmt"># 2. Find Chinese suppliers for fasteners</span>
+<span class="key">POST</span> <span class="url">/mcp/find_china_supplier</span>
+{
+  <span class="key">"category"</span>: <span class="str">"fastener"</span>,
+  <span class="key">"spec"</span>: <span class="str">"DIN 933 M8"</span>,
+  <span class="key">"cert_required"</span>: [<span class="str">"ISO9001"</span>],
+  <span class="key">"moq_max"</span>: 50000
+}
+<span class="cmt"># → returns 8-15 ranked suppliers with trust_score, reviews, certifications</span>
+    </div>
+
+    <div class="code-block" style="margin-top: 16px;">
+<span class="cmt"># 3. Get real-time pricing</span>
+<span class="key">POST</span> <span class="url">/mcp/get_pricing</span>
+{
+  <span class="key">"supplier_id"</span>: <span class="str">"sup_001"</span>,
+  <span class="key">"quantity"</span>: 25000,
+  <span class="key">"incoterm"</span>: <span class="str">"FOB"</span>
+}
+<span class="cmt"># → returns tiered pricing, lead time, inventory</span>
+    </div>
+
+    <div class="code-block" style="margin-top: 16px;">
+<span class="cmt"># 4. Submit RFQ — factory responds within 5 business days</span>
+<span class="key">POST</span> <span class="url">/mcp/submit_rfq</span>
+{
+  <span class="key">"supplier_id"</span>: <span class="str">"sup_001"</span>,
+  <span class="key">"product"</span>: <span class="str">"Hex Bolt DIN 933 M8x40"</span>,
+  <span class="key">"quantity"</span>: 25000,
+  <span class="key">"delivery_port"</span>: <span class="str">"Los Angeles"</span>,
+  <span class="key">"notes"</span>: <span class="str">"Need zinc plating, ISO9001 cert"</span>
+}
+    </div>
+  </div>
+</section>
+
+<!-- 12 Core Tools -->
+<section class="section">
+  <h2>12 Core <span>Tools</span></h2>
+  <p class="lead">Everything your agent needs to source from China — supplier discovery, pricing, specs, certifications, RFQs.</p>
+  <div class="features">
+    <div class="feature-card">
+      <div class="icon">🔍</div>
+      <h3>find_china_supplier</h3>
+      <p>Match 8–15 verified suppliers in 5 seconds. 7-dimension scoring (trust, reviews, cert, capacity, MOQ, lead time, fit).</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">💰</div>
+      <h3>get_pricing</h3>
+      <p>Tiered FOB/CIF pricing in real time. No more waiting days for a quote.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">📦</div>
+      <h3>get_inventory</h3>
+      <p>Live stock levels and lead time. Avoid out-of-stock surprises.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">📏</div>
+      <h3>match_spec</h3>
+      <p>Cross-standard spec matching: DIN / ISO / ANSI / JIS / GB.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">📜</div>
+      <h3>download_cert</h3>
+      <p>One-click download of ISO / IATF / CE / RoHS / FDA certificates.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🌐</div>
+      <h3>multi_lang_inquiry</h3>
+      <p>Auto-generate inquiries in EN / ZH / ES / AR / FR / RU / JA / KO.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">📋</div>
+      <h3>submit_rfq</h3>
+      <p>Submit RFQs directly. Factories respond within 5 business days.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🎯</div>
+      <h3>register_buyer</h3>
+      <p>Self-register as a buyer — no admin approval needed to start sending RFQs.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">📊</div>
+      <h3>evaluate_sme</h3>
+      <p>5-dimension AI export-readiness assessment for manufacturers (free).</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🔧</div>
+      <h3>register_supplier</h3>
+      <p>Factory registration auto-activates a hosted MCP — zero infra required.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🚀</div>
+      <h3>update_products</h3>
+      <p>Add/edit products via natural language. Instantly queryable by overseas agents.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🗂️</div>
+      <h3>upload_products_csv</h3>
+      <p>Bulk import products via CSV. Compatible with Chinese Excel formats.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Install guide -->
+<section class="section" style="background: var(--gray);" id="install">
+  <h2>Install in <span>30 Seconds</span></h2>
+  <p class="lead">Just tell your agent to install LinkMoney. That's it.</p>
+  <div style="max-width: 700px; margin: 0 auto;">
+    <div class="install-block">
+      <p style="color:rgba(255,255,255,0.7); margin-bottom:8px;"># Anthropic Skills (recommended)</p>
+      <code>$ npx skills add KevinANDcayla/linkmoney-skill</code>
+    </div>
+    <div class="install-block">
+      <p style="color:rgba(255,255,255,0.7); margin-bottom:8px;"># Claude Code plugin</p>
+      <code>$ /plugin install linkmoney@linkmoney-ai</code>
+    </div>
+    <div class="install-block">
+      <p style="color:rgba(255,255,255,0.7); margin-bottom:8px;"># Direct MCP endpoint</p>
+      <code>mcp_endpoint: https://linkmoney.online/mcp</code>
+    </div>
+    <p style="text-align:center; margin-top:24px; color:#666;">
+      Also available on Coze Store, Alibaba AgentRun, Qwen App, and DingTalk AI — search "LinkMoney"
+    </p>
+  </div>
+</section>
+
+<!-- Categories covered -->
+<section class="section" style="background: var(--gray);">
+  <h2>8 Industry <span>Categories</span></h2>
+  <p class="lead">From fasteners to textiles — covering the core of Chinese manufacturing.</p>
+  <div style="max-width: 820px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px;">
+    <div style="background:#fff; padding:20px; border-radius:8px; text-align:center;"><div style="font-size:28px;">🔩</div><div style="font-weight:600; margin-top:8px;">Fasteners</div></div>
+    <div style="background:#fff; padding:20px; border-radius:8px; text-align:center;"><div style="font-size:28px;">🔌</div><div style="font-weight:600; margin-top:8px;">Electronics</div></div>
+    <div style="background:#fff; padding:20px; border-radius:8px; text-align:center;"><div style="font-size:28px;">📦</div><div style="font-weight:600; margin-top:8px;">Packaging</div></div>
+    <div style="background:#fff; padding:20px; border-radius:8px; text-align:center;"><div style="font-size:28px;">⚙️</div><div style="font-weight:600; margin-top:8px;">Hardware</div></div>
+    <div style="background:#fff; padding:20px; border-radius:8px; text-align:center;"><div style="font-size:28px;">🛠️</div><div style="font-weight:600; margin-top:8px;">Injection Molding</div></div>
+    <div style="background:#fff; padding:20px; border-radius:8px; text-align:center;"><div style="font-size:28px;">🏭</div><div style="font-weight:600; margin-top:8px;">Machinery</div></div>
+    <div style="background:#fff; padding:20px; border-radius:8px; text-align:center;"><div style="font-size:28px;">🧵</div><div style="font-weight:600; margin-top:8px;">Textiles</div></div>
+    <div style="background:#fff; padding:20px; border-radius:8px; text-align:center;"><div style="font-size:28px;">🧱</div><div style="font-weight:600; margin-top:8px;">Materials</div></div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="section" style="text-align:center;">
+  <h2>Start Sourcing with <span>Your Agent Today</span></h2>
+  <p style="color:#666; margin-bottom:24px; max-width:560px; margin-left:auto; margin-right:auto;">
+    Join the agents already sourcing from 2,500+ verified Chinese manufacturers. 100% free — no credit card, no usage caps.
+  </p>
+  <a href="#install" class="btn btn-gold" style="font-size:18px; padding:18px 48px;">Install Free Skill</a>
+</section>
+
+<footer>
+  <p>LinkMoney — The B2B Trade Connector for the Agent Era</p>
+  <p style="margin-top:8px;">
+    <a href="https://linkmoney.online">linkmoney.online</a> ·
+    <a href="https://github.com/linkmoney-ai">GitHub</a> ·
+    agent@linkmoney.online
+  </p>
+  <p style="margin-top:16px; font-size:12px;">
+    LinkMoney is a neutral third-party connector and data distributor. We don't sell goods, manufacture, or take commissions from users.
+  </p>
+</footer>
+
+</body>
+</html>
