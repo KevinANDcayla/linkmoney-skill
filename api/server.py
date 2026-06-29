@@ -1156,6 +1156,7 @@ _AUTH_EXEMPT_PATHS = {
     "/verify_email", "/trust_score/supplier",  # 公开端点：验证 + 信用查询
     "/skill.md", "/.well-known/ai-plugin.json", "/.well-known/linkmoney-skill.json",  # Skill 发现端点
     "/register_buyer",  # v3.3: 海外采购方自注册（公开，降低 W 端闭环门槛）
+    "/register_supplier",  # v5.2.3: 中方工厂自注册（公开，降低 C 端闭环门槛，限流 5/hour/IP）
     # v3.0 中间 Agent：作为平台维护者，对内默认开启（可在生产环境收紧）
     "/agent/status", "/agent/health", "/agent/routing",
     "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain",
@@ -3927,30 +3928,47 @@ def _compute_trust_level(score: float, email_v: int, phone_v: int, license_v: in
 
 
 def _auto_evaluate_supplier(supplier: dict) -> dict:
-    """v2.1 内部自动评估（5 维度），不暴露给工厂自助"""
-    # 1. 资质
-    age = max(0, datetime.now().year - supplier.get("year_established", 0))
-    qual_score = min(100, age * 4 + 20)  # 5 年=40, 10 年=60
+    """v2.1 内部自动评估（5 维度），不暴露给工厂自助
+    v5.2.3: 营业执照未验证（license_verified=0）时，资质/产能/出口/质量4维度只给基础分，
+    防止虚构自填数据刷分。验证营业执照后才按真实数据计分。
+    """
+    license_verified = supplier.get("license_verified", 0)
 
-    # 2. 产能（员工数 + 年营收）
-    employees = supplier.get("employees", 0)
-    revenue = supplier.get("annual_revenue_usd", 0)
-    if employees >= 200 or revenue >= 5_000_000:
-        cap_score = 90
-    elif employees >= 50 or revenue >= 1_000_000:
-        cap_score = 70
-    elif employees >= 20 or revenue >= 300_000:
-        cap_score = 50
+    # 1. 资质（成立年份，需营业执照验证才计分）
+    if license_verified:
+        age = max(0, datetime.now().year - supplier.get("year_established", 0))
+        qual_score = min(100, age * 4 + 20)  # 5 年=40, 10 年=60
     else:
-        cap_score = 30
+        qual_score = 30  # 未验证：基础分
 
-    # 3. 出口比例
-    exp_ratio = supplier.get("export_ratio", 0)
-    export_score = min(100, exp_ratio)
+    # 2. 产能（员工数 + 年营收，需营业执照验证才计分）
+    if license_verified:
+        employees = supplier.get("employees", 0)
+        revenue = supplier.get("annual_revenue_usd", 0)
+        if employees >= 200 or revenue >= 5_000_000:
+            cap_score = 90
+        elif employees >= 50 or revenue >= 1_000_000:
+            cap_score = 70
+        elif employees >= 20 or revenue >= 300_000:
+            cap_score = 50
+        else:
+            cap_score = 30
+    else:
+        cap_score = 30  # 未验证：基础分
 
-    # 4. 质量（认证数 + v5.2 评价均分加权）
-    cert_count = len(supplier.get("certifications", []))
-    quality_score = min(100, cert_count * 20)
+    # 3. 出口比例（需营业执照验证才计分）
+    if license_verified:
+        exp_ratio = supplier.get("export_ratio", 0)
+        export_score = min(100, exp_ratio)
+    else:
+        export_score = 20  # 未验证：基础分
+
+    # 4. 质量（认证数，需营业执照验证才计分；评价加权不受影响）
+    if license_verified:
+        cert_count = len(supplier.get("certifications", []))
+        quality_score = min(100, cert_count * 20)
+    else:
+        quality_score = 20  # 未验证：基础分
     # v5.2: 若有评价，叠加 review 加权（4.5 星→+15, 3.0 星→0, 2.0 星→-10）
     review_count = supplier.get("review_count", 0)
     review_avg = supplier.get("review_avg", 0)
@@ -4014,6 +4032,7 @@ def _recalculate_trust_score(conn, supplier_id: str):
             "certifications": s.get("certifications", []),
             "agent_skill_installed": s.get("agent_skill_installed", 0),
             "email_verified": s.get("email_verified", 0),
+            "license_verified": s.get("license_verified", 0),  # v5.2.3: 营业执照验证状态
             "review_avg": s.get("review_avg", 0),
             "review_count": s.get("review_count", 0),
         })
@@ -4297,7 +4316,7 @@ class RegisterSupplierRequest(BaseModel):
     main_markets: list = []
     contact_person: str = ""
     email: str
-    phone: str = ""
+    phone: str                     # v5.2.3: phone 改必填（审核对空手机号 block）
     wechat: str = ""
     moq: int = 0
     lead_time_days_standard: int = 0
@@ -4307,10 +4326,12 @@ class RegisterSupplierRequest(BaseModel):
     image_urls: list = []          # 工厂照片公网 URL（最多 10 张）
     audio_text: str = ""           # BD 录音转写（可选）
     factory_location: str = ""     # 工厂地址（可选）
+    uscc: str = ""                 # v5.2.3: 统一社会信用代码（18 位，用于营业执照验证）
 
 
 @app.post("/register_supplier")
-def register_supplier(req: RegisterSupplierRequest):
+@limiter.limit("5/hour")
+def register_supplier(request: Request, req: RegisterSupplierRequest):
     """
     工厂自助注册（v2.1 新流程）
     工厂只需要填产品资料+联系信息，LinkMoney 帮它：
@@ -4327,7 +4348,7 @@ def register_supplier(req: RegisterSupplierRequest):
             company_name=req.company_name,
             email=req.email,
             phone=req.phone or "",
-            uscc=getattr(req, "uscc", ""),
+            uscc=req.uscc,
             country="CN",
             llm_provider=get_llm() if get_llm().is_available() else None,
         )
@@ -4352,12 +4373,16 @@ def register_supplier(req: RegisterSupplierRequest):
                 pass
         _reg_ts_audit = reg_audit.to_dict()
     except ImportError:
-        _reg_ts_audit = None
+        _reg_ts_audit = None  # trust_safety 模块缺失时放行（开发环境）
     except HTTPException:
         raise
     except Exception as e:
-        _reg_ts_audit = None
-        logger.warning(f"Registration T&S audit failed: {e}")
+        # v5.2.3: fail-closed — 审核模块异常时拒绝注册（防审核被绕过）
+        logger.error(f"Registration T&S audit failed (fail-closed): {e}")
+        raise HTTPException(status_code=503, detail={
+            "error": "Registration temporarily unavailable due to audit system error",
+            "reason": "安全审核系统异常，请稍后重试",
+        })
 
     supplier_id = _slugify_supplier_id(req.company_name, req.category)
     name_en = req.company_name  # 简化：英文名=中文名
@@ -4412,23 +4437,36 @@ def register_supplier(req: RegisterSupplierRequest):
     hosted_mcp_endpoint = f"https://linkmoney.online/mcp/supplier/{supplier_id}"
 
     # v3.2: 查重 + 插入在同一事务内（消除 TOCTOU 竞态）
-    # 查重维度：邮箱、公司名、手机号、supplier_id
+    # v5.2.3: 查重维度增强 — 邮箱、公司名（模糊匹配）、手机号、邮箱域名（限 3 个）
+    import re as _re
+    _normalize_name = _re.sub(r"[\s\u3000\.,，。·\-_()（）]+", "", req.company_name).lower()
+
     with get_db() as conn:
         # 1. 邮箱查重
         existing = conn.execute("SELECT id FROM suppliers WHERE email = ?", (req.email,)).fetchone()
         if existing:
             raise HTTPException(status_code=409, detail=f"该邮箱已注册为供应商 {existing['id']}")
 
-        # 2. 公司名查重（中文名精确匹配）
-        existing = conn.execute("SELECT id, category FROM suppliers WHERE name_zh = ?", (req.company_name,)).fetchone()
-        if existing:
-            raise HTTPException(status_code=409, detail=f"该公司名已注册为供应商 {existing['id']}（品类: {existing['category']}）。如需修改信息，请联系管理员。")
+        # 2. 公司名查重（v5.2.3: 模糊匹配 — 去空格/标点/大小写后比较，防"加个空格"绕过）
+        all_suppliers = conn.execute("SELECT id, name_zh, category FROM suppliers").fetchall()
+        for s in all_suppliers:
+            if _re.sub(r"[\s\u3000\.,，。·\-_()（）]+", "", s["name_zh"] or "").lower() == _normalize_name:
+                raise HTTPException(status_code=409, detail=f"该公司名已注册为供应商 {s['id']}（品类: {s['category']}）。如需修改信息，请联系管理员。")
 
-        # 3. 手机号查重（如果提供了手机号）
-        if req.phone:
-            existing = conn.execute("SELECT id FROM suppliers WHERE phone = ?", (req.phone,)).fetchone()
-            if existing:
-                raise HTTPException(status_code=409, detail=f"该手机号已注册为供应商 {existing['id']}")
+        # 3. 手机号查重
+        existing = conn.execute("SELECT id FROM suppliers WHERE phone = ?", (req.phone,)).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail=f"该手机号已注册为供应商 {existing['id']}")
+
+        # 4. 邮箱域名查重（v5.2.3: 同域名限 3 个，防批量注册）
+        _email_domain = req.email.split("@")[-1].lower() if "@" in req.email else ""
+        if _email_domain:
+            domain_count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM suppliers WHERE LOWER(SUBSTR(email, INSTR(email, '@') + 1)) = ?",
+                (_email_domain,)
+            ).fetchone()["cnt"]
+            if domain_count >= 3:
+                raise HTTPException(status_code=429, detail=f"该邮箱域名（@{_email_domain}）已注册 {domain_count} 个供应商，达到上限。如需更多，请联系管理员。")
 
         # 4. supplier_id 查重（v3.3.3: 冲突时自动加序号后缀，而非直接报错）
         base_id = supplier_id

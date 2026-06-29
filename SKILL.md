@@ -281,10 +281,33 @@ export LLM_ENABLED=false
 | 必填字段 | 来源 | 示例 | 缺失时追问话术 |
 |---------|------|------|---------------|
 | `company_name` | 老板口述 | "宁波新锐紧固件有限公司" | "您公司全称是？" |
-| `contact_email` | 老板口述 | "sales@xinrui.com" | "海外采购方联系您的邮箱是？" |
-| `contact_phone` | 老板口述 | "138xxxx" | "联系电话是？" |
+| `email` | 老板口述 | "sales@xinrui.com" | "海外采购方联系您的邮箱是？" |
+| `phone` | 老板口述 | "138xxxx" | "联系电话是？" |
 | `category` | 老板口述或推断 | "fastener" / "electronics" / "packaging" | "您主营品类是？" |
 | `products` | 老板口述或产品册 | `[{sku, name, spec, unit_price_usd, moq, stock}]` | "您想上线哪几款主打产品？" |
+
+**`register_supplier` 完整参数表**（POST /register_supplier，**无需 API Key**，v5.2.3 起公开）：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `company_name` | string | ✅ | 公司全称（须含"有限公司/Ltd/Inc"等合法后缀） |
+| `category` | string | ✅ | 品类：fastener/electronics/textile/packaging/machinery/hardware/injection_molding/auto_parts/furniture/building_materials/chemical/medical_devices/lighting/sports_outdoor/food_beverage/toys |
+| `email` | string | ✅ | 接收 RFQ 询盘的邮箱（一次性邮箱会被拒） |
+| `phone` | string | ✅ | 联系电话（中国手机号 1 开头 11 位） |
+| `contact_person` | string | 选填 | 联系人姓名 |
+| `products` | list | 选填 | 产品列表 `[{sku, name, spec, unit_price_usd, moq, stock, price_tiers}]` |
+| `certifications` | list | 选填 | 认证列表（未验证营业执照前不计入 trust_score） |
+| `employees` | int | 选填 | 员工数（未验证前不计入 trust_score） |
+| `year_established` | int | 选填 | 成立年份（未验证前不计入 trust_score） |
+| `annual_revenue_usd` | float | 选填 | 年营收 USD |
+| `export_ratio` | float | 选填 | 出口比例 0-100（未验证前不计入 trust_score） |
+| `main_markets` | list | 选填 | 主要出口市场 |
+| `wechat` | string | 选填 | 微信号 |
+| `moq` | int | 选填 | 起订量 |
+| `uscc` | string | 选填 | 统一社会信用代码（18 位，用于营业执照验证） |
+| `factory_location` | string | 选填 | 工厂地址 |
+
+> ⚠️ **限流**：每个 IP 每小时限注册 5 次。**查重**：邮箱、手机号、公司名（模糊匹配，去空格标点）、邮箱域名（同域名限 3 个）均去重。
 
 **Agent 执行阶段**（一次调用完成）：
 
@@ -294,8 +317,8 @@ export LLM_ENABLED=false
   "params": {
     "company_name": "宁波新锐紧固件有限公司",
     "contact_person": "王总",
-    "contact_email": "sales@xinrui.com",
-    "contact_phone": "138xxxx",
+    "email": "sales@xinrui.com",
+    "phone": "138xxxx",
     "category": "fastener",
     "products": [
       {
@@ -338,7 +361,7 @@ export LLM_ENABLED=false
 **关键设计原则**：
 - **零部署**：工厂不需要服务器、域名、Docker、GitHub 仓库
 - **零技术参数**：Agent 自动构造请求，老板只需要说人话
-- **即时生效**：注册成功 = 海外可见，无审核等待
+- **即时生效**：注册成功 = 海外可见（trust_score 初始较低，补全资料 + 验证营业执照后提升排名）
 - **对话式管理**：后续增删改产品通过 `update_products` / `upload_products_csv` 对话完成
 
 ### 2.4 安全代理架构数据流
