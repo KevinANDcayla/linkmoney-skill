@@ -152,6 +152,7 @@ def _migrate_v21():
             ("outreach_used_this_month", "INTEGER DEFAULT 0"),
             ("outreach_reset_at", "TEXT DEFAULT ''"),
             ("data_source_type", "TEXT DEFAULT 'hosted'"),  # v3.3: hosted(托管)/self(自部署)/tunnel(隧道)
+            ("access_token", "TEXT DEFAULT ''"),  # v5.2.4: 工厂身份凭证（长期有效，区别于 verification_token）
         ]:
             try:
                 c.execute(f"ALTER TABLE suppliers ADD COLUMN {col_name} {col_type}")
@@ -516,7 +517,8 @@ def init_db(force: bool = False):
                 verification_token TEXT DEFAULT '',
                 outreach_used_this_month INTEGER DEFAULT 0,
                 outreach_reset_at TEXT DEFAULT '',
-                data_source_type TEXT DEFAULT 'hosted'
+                data_source_type TEXT DEFAULT 'hosted',
+                access_token TEXT DEFAULT ''
             )
         """)
 
@@ -3186,16 +3188,17 @@ def get_rfq_status(
 def get_my_rfqs(
     request: Request,
     supplier_id: str = Query(..., description="供应商ID"),
+    access_token: str = Query("", description="v5.2.4: 工厂身份凭证"),
     status: str = Query("", description="筛选状态: pending/quoted/negotiating/closed"),
 ):
     """
     中国供应商查询自己收到的 RFQ 询盘列表。
     状态可选: pending(待处理) / quoted(已报价) / negotiating(洽谈中) / closed(已关闭)
+    v5.2.4: 需携带 access_token 校验身份
     """
     with get_db() as conn:
-        s_row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-    if not s_row:
-        raise HTTPException(status_code=404, detail=f"Supplier '{supplier_id}' not found")
+        # v5.2.4: 统一身份校验
+        s_row = _verify_supplier_access(conn, supplier_id, access_token)
 
     supplier = _row_to_supplier(s_row)
 
@@ -3290,6 +3293,7 @@ def get_my_rfqs(
 class QuoteRequest(BaseModel):
     rfq_id: str
     supplier_id: str
+    access_token: str = ""  # v5.2.4: 工厂身份凭证
     unit_price_usd: float
     lead_time_days: int
     total_price_usd: float = 0
@@ -3302,7 +3306,12 @@ def send_quote(req: QuoteRequest, request: Request):
     """
     中国供应商对 RFQ 进行报价，并自动邮件通知海外采购方。
     报价后 RFQ 状态从 pending → quoted。
+    v5.2.4: 需携带 access_token 校验身份
     """
+    # v5.2.4: 统一身份校验
+    with get_db() as conn:
+        _verify_supplier_access(conn, req.supplier_id, req.access_token)
+
     with get_db() as conn:
         rfq_row = conn.execute("SELECT * FROM rfqs WHERE id = ?", (req.rfq_id,)).fetchone()
     if not rfq_row:
@@ -3900,6 +3909,29 @@ def _gen_token(length: int = 32) -> str:
     return hashlib.sha256(os.urandom(length)).hexdigest()[:length]
 
 
+def _verify_supplier_access(conn, supplier_id: str, access_token: str) -> dict:
+    """v5.2.4: 统一校验工厂身份 — supplier_id + access_token 绑定。
+
+    Args:
+        conn: SQLite 连接
+        supplier_id: 供应商 ID
+        access_token: 工厂长期身份凭证（注册时返回，不随邮箱验证失效）
+
+    Returns:
+        供应商行 dict（校验通过）
+
+    Raises:
+        HTTPException 404: 供应商不存在
+        HTTPException 401: access_token 缺失或错误
+    """
+    s = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+    if not s:
+        raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
+    if not access_token or access_token != s["access_token"]:
+        raise HTTPException(status_code=401, detail="access_token 无效或缺失。请用注册时返回的 access_token 调用。")
+    return dict(s)
+
+
 def _slugify_supplier_id(name: str, category: str) -> str:
     """根据公司名+品类生成供应商 ID（避免中文，保证唯一性）
 
@@ -4431,6 +4463,7 @@ def register_supplier(request: Request, req: RegisterSupplierRequest):
     })
 
     verification_token = _gen_token(16)
+    access_token = _gen_token(32)  # v5.2.4: 工厂长期身份凭证，不随邮箱验证失效
     now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # v3.3: 中心化托管 — 注册即自动生成 MCP endpoint，工厂无需自己部署
@@ -4488,8 +4521,8 @@ def register_supplier(request: Request, req: RegisterSupplierRequest):
                     agent_skill_installed, skill_mcp_endpoint, skill_platforms, skill_installs,
                     created_at, updated_at, contact_person, email, phone, wechat, language_contact,
                     email_verified, phone_verified, license_verified, trust_score, trust_level,
-                    verification_token, data_source_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    verification_token, data_source_type, access_token
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 supplier_id,
                 req.company_name, name_en, city, province, port,
@@ -4507,6 +4540,7 @@ def register_supplier(request: Request, req: RegisterSupplierRequest):
                 eval_result["overall_score"], eval_result["trust_level"],
                 verification_token,
                 "hosted",
+                access_token,
             ))
 
             # 写入 products（使用 INSERT OR REPLACE，防止 sku 重复时更新而非报错）
@@ -4626,6 +4660,7 @@ trust_score: {eval_result['overall_score']}
         "data_source_type": "hosted",
         "has_skill": True,
         "agent_skill_installed": True,
+        "access_token": access_token,  # v5.2.4: 工厂长期身份凭证，后续所有写操作需携带
         "verification": {
             "email_verified": False,
             "phone_verified": False,
@@ -4643,7 +4678,7 @@ trust_score: {eval_result['overall_score']}
         "next_action": {
             "step_1": "验证邮箱：访问 verify_url 或调用 /verify_email?token=xxx",
             "step_2": f"你的工厂已自动激活，MCP endpoint: {hosted_mcp_endpoint}",
-            "step_3": "通过对话管理产品：调用 POST /suppliers/{supplier_id}/products 增删改产品",
+            "step_3": "通过对话管理产品：调用 POST /suppliers/{supplier_id}/products 增删改产品（需带 access_token）",
             "step_4": "海外 Agent 现在可以通过 find_china_supplier 搜索到你",
         },
         "estimated_time_to_live": "验证邮箱后立即被海外 Agent 搜索到（托管模式，实时数据）",
@@ -4770,7 +4805,8 @@ def verify_email(token: str):
 class LinkMcpRequest(BaseModel):
     """工厂部署完自有 MCP Server 后，回写 endpoint 到中央库"""
     mcp_endpoint: str                           # 如 https://factory.com/mcp
-    verification_token: str = ""                # 注册时返回的 token（或邮箱验证后的 session）
+    access_token: str = ""                      # v5.2.4: 工厂身份凭证
+    verification_token: str = ""                # 向后兼容（已弃用）
     skill_platforms: list = []                  # 已发布到哪些平台 ["github","claude","coze"]
     skill_installs: int = 0                     # 安装数
 
@@ -4790,16 +4826,8 @@ def link_supplier_mcp(supplier_id: str, req: LinkMcpRequest):
         raise HTTPException(status_code=400, detail="mcp_endpoint 必须是 http(s):// 开头的 URL")
 
     with get_db() as conn:
-        # 1. 验证 supplier 存在
-        s = conn.execute("SELECT id, name_zh, email, verification_token, email_verified, agent_skill_installed FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-        if not s:
-            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
-
-        # 2. 鉴权：verification_token 或邮箱已验证
-        token_ok = req.verification_token and req.verification_token == s["verification_token"]
-        email_verified = bool(s["email_verified"])
-        if not token_ok and not email_verified:
-            raise HTTPException(status_code=403, detail="需要有效的 verification_token 或已验证的邮箱")
+        # v5.2.4: 统一身份校验
+        _verify_supplier_access(conn, supplier_id, req.access_token)
 
         # 3. 可选：探测 MCP endpoint 可达性（best-effort，失败不阻塞）
         mcp_reachable = False
@@ -4853,12 +4881,8 @@ def link_supplier_mcp(supplier_id: str, req: LinkMcpRequest):
 def unlink_supplier_mcp(supplier_id: str, req: LinkMcpRequest):
     """取消 MCP 端点登记（回退到缓存模式）"""
     with get_db() as conn:
-        s = conn.execute("SELECT id, verification_token, email_verified FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-        if not s:
-            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
-        token_ok = req.verification_token and req.verification_token == s["verification_token"]
-        if not token_ok and not bool(s["email_verified"]):
-            raise HTTPException(status_code=403, detail="需要有效的 verification_token")
+        # v5.2.4: 统一身份校验
+        _verify_supplier_access(conn, supplier_id, req.access_token)
 
         conn.execute("""
             UPDATE suppliers SET
@@ -5080,7 +5104,8 @@ class ProductItem(BaseModel):
 
 class UpdateProductsRequest(BaseModel):
     """批量增删改产品"""
-    verification_token: str = ""
+    access_token: str = ""   # v5.2.4: 工厂身份凭证（替代 verification_token）
+    verification_token: str = ""  # 向后兼容（已弃用，access_token 优先）
     upsert: list = []   # 新增或更新（按 supplier_id + sku 去重）
     delete_skus: list = []  # 要删除的 SKU 列表
 
@@ -5095,15 +5120,8 @@ def update_supplier_products(supplier_id: str, req: UpdateProductsRequest):
     - 产品立即生效，海外 Agent 可查询
     """
     with get_db() as conn:
-        # 1. 验证 supplier 存在
-        s = conn.execute("SELECT id, verification_token, email_verified FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-        if not s:
-            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
-
-        # 2. 鉴权
-        token_ok = req.verification_token and req.verification_token == s["verification_token"]
-        if not token_ok and not bool(s["email_verified"]):
-            raise HTTPException(status_code=403, detail="需要有效的 verification_token 或已验证的邮箱")
+        # v5.2.4: 统一身份校验 — supplier_id + access_token 绑定
+        _verify_supplier_access(conn, supplier_id, req.access_token)
 
         now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         upserted = 0
@@ -5166,17 +5184,12 @@ async def upload_products_csv(supplier_id: str, request: Request):
     sku, name_zh, name_en, material, grade, moq, unit_price_usd,
     inventory_quantity, trade_terms, port, hs_code, payment_terms
 
-    鉴权：请求头 X-Verification-Token 或查询参数 verification_token
+    鉴权：请求头 X-Access-Token 或查询参数 access_token（v5.2.4 起）
     """
-    # 鉴权
-    token = request.headers.get("X-Verification-Token", "") or request.query_params.get("verification_token", "")
+    # v5.2.4: 鉴权 — supplier_id + access_token 绑定
+    access_token = request.headers.get("X-Access-Token", "") or request.query_params.get("access_token", "")
     with get_db() as conn:
-        s = conn.execute("SELECT id, verification_token, email_verified, category FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-        if not s:
-            raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
-        token_ok = token and token == s["verification_token"]
-        if not token_ok and not bool(s["email_verified"]):
-            raise HTTPException(status_code=403, detail="需要有效的 verification_token 或已验证的邮箱")
+        s = _verify_supplier_access(conn, supplier_id, access_token)
         supplier_category = s["category"]
 
     # 读取 CSV 内容
@@ -5539,6 +5552,7 @@ def browse_requirements(
 class BidOnRequirementRequest(BaseModel):
     requirement_id: str
     supplier_id: str
+    access_token: str = ""  # v5.2.4: 工厂身份凭证
     unit_price_usd: float
     lead_time_days: int = 0
     moq: int = 0
@@ -5551,19 +5565,20 @@ def bid_on_requirement(req: BidOnRequirementRequest, request: Request):
     """
     工厂对公开需求报价（v2.2 需求广场）。
     关键：买家邮箱不直接暴露给工厂，LinkMoney 撮合。
+    v5.2.4: 需携带 access_token 校验身份
     """
+    # v5.2.4: 统一身份校验
+    with get_db() as conn:
+        s_row = _verify_supplier_access(conn, req.supplier_id, req.access_token)
+    if not s_row["email_verified"]:
+        raise HTTPException(status_code=403, detail="请先验证邮箱后再报价")
+
     with get_db() as conn:
         r_row = conn.execute("SELECT * FROM requirements WHERE id = ?", (req.requirement_id,)).fetchone()
         if not r_row:
             raise HTTPException(status_code=404, detail="需求不存在")
         if r_row["status"] != "open":
             raise HTTPException(status_code=400, detail=f"需求状态: {r_row['status']}")
-
-        s_row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (req.supplier_id,)).fetchone()
-        if not s_row:
-            raise HTTPException(status_code=404, detail="供应商不存在")
-        if not s_row["email_verified"]:
-            raise HTTPException(status_code=403, detail="请先验证邮箱后再报价")
 
     bid_id = f"bid-{datetime.now().strftime('%Y%m%d')}-{_gen_token(4)}"
     with get_db() as conn:

@@ -34,7 +34,7 @@
     },
     "chinese_tools": [
       {"name": "evaluate_sme", "endpoint": "/evaluate_sme", "purpose": "5 维评估中国制造业 AI 出海 Agent 化水平"},
-      {"name": "register_supplier", "endpoint": "POST /register_supplier", "purpose": "中方工厂注册入驻（v3.3 自动激活托管 MCP）。无需 API Key，限流 5次/小时/IP。必填: company_name, category, email, phone; 选填: products, certifications, employees, year_established, uscc, factory_location, wechat, moq"},
+      {"name": "register_supplier", "endpoint": "POST /register_supplier", "purpose": "中方工厂注册入驻（v3.3 自动激活托管 MCP）。无需 API Key，限流 5次/小时/IP。必填: company_name, category, email, phone; 选填: products, certifications, employees, year_established, uscc, factory_location, wechat, moq。返回 supplier_id + access_token（后续所有写操作的身份凭证，持久化到 ~/.linkmoney/identity.json）"},
       {"name": "update_products", "endpoint": "/suppliers/{id}/products", "purpose": "v3.3 工厂通过对话增删改产品（托管模式核心管理端点）"},
       {"name": "upload_products_csv", "endpoint": "/suppliers/{id}/upload_csv", "purpose": "v3.3 CSV 批量导入产品（兼容中文 Excel）"},
       {"name": "get_my_rfqs", "endpoint": "/get_my_rfqs", "purpose": "工厂查询自己收到的 RFQ 询盘"},

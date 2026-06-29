@@ -364,6 +364,59 @@ export LLM_ENABLED=false
 - **即时生效**：注册成功 = 海外可见（trust_score 初始较低，补全资料 + 验证营业执照后提升排名）
 - **对话式管理**：后续增删改产品通过 `update_products` / `upload_products_csv` 对话完成
 
+#### 🆕 v5.2.4 Agent 身份持久化（跨对话识别工厂）
+
+> **核心问题**：Agent 每次对话是无状态的，新对话里不知道自己代表哪个工厂。以下约定确保 Agent 跨对话能正确识别身份，不会误操作其他工厂。
+
+**注册成功后，Agent 必须立即持久化身份**：
+
+注册响应会返回 `supplier_id` 和 `access_token`。Agent 必须把它们写入本地文件：
+
+```bash
+# Agent 注册成功后执行（用 shell 命令或等效文件写入）
+mkdir -p ~/.linkmoney
+cat > ~/.linkmoney/identity.json << EOF
+{
+  "supplier_id": "注册返回的 supplier_id",
+  "access_token": "注册返回的 access_token",
+  "company_name": "工厂名",
+  "registered_at": "注册时间"
+}
+EOF
+```
+
+**新对话开始时，Agent 必须先读取身份文件**：
+
+当老板说"添加产品"、"查 RFQ"、"改价格"等需要身份的操作时，Agent 应先执行：
+
+```bash
+cat ~/.linkmoney/identity.json
+```
+
+读取到 `supplier_id` 和 `access_token` 后，在后续所有调用中携带：
+
+| 端点 | 身份携带方式 |
+|------|------------|
+| `POST /suppliers/{supplier_id}/products` | body 加 `"access_token": "xxx"` |
+| `POST /suppliers/{supplier_id}/upload_csv` | 请求头 `X-Access-Token: xxx` 或 query `?access_token=xxx` |
+| `GET /get_my_rfqs?supplier_id=xxx` | query 加 `&access_token=xxx` |
+| `POST /send_quote` | body 加 `"access_token": "xxx"` |
+| `POST /bid_on_requirement` | body 加 `"access_token": "xxx"` |
+| `POST /suppliers/{supplier_id}/link_mcp` | body 加 `"access_token": "xxx"` |
+| `POST /suppliers/{supplier_id}/unlink_mcp` | body 加 `"access_token": "xxx"` |
+
+**access_token 的特性**：
+- ✅ 长期有效，不随邮箱验证失效（区别于旧的 verification_token）
+- ✅ 与 supplier_id 绑定，是工厂的唯一身份凭证
+- ❌ 不可猜测（32 字符随机串），不可用其他工厂的 token 冒充
+- ❌ 丢失后需联系管理员重置（暂无自助找回，v5.3 计划支持）
+
+**身份文件不存在时的处理**：
+
+如果 `~/.linkmoney/identity.json` 不存在，Agent 应主动引导老板：
+
+> 您还没有注册 LinkMoney。请告诉我您的公司全称、联系邮箱、联系电话、主营品类，我帮您注册并保存身份。
+
 ### 2.4 安全代理架构数据流
 
 ```
