@@ -147,7 +147,10 @@ r = requests.post(f"{BASE}/submit_rfq", headers=HEADERS, json={
     "supplier_id": suppliers[0]["id"],
     "product_sku": suppliers[0]["products"][0]["sku"],
     "quantity": 50000,
-    "delivery_port": "Ningbo"          # FOB 港口
+    "delivery_port": "Ningbo",          # FOB 港口
+    "confirm_data_sharing": True,        # 必填：确认数据将发送给供应商
+    "contact_name": "John Smith",        # 推荐填：联系人姓名
+    "contact_email": "john@buyer.com"   # 推荐填：供应商将回复此邮箱
 })
 ```
 
@@ -409,13 +412,57 @@ cat ~/.linkmoney/identity.json
 - ✅ 长期有效，不随邮箱验证失效（区别于旧的 verification_token）
 - ✅ 与 supplier_id 绑定，是工厂的唯一身份凭证
 - ❌ 不可猜测（32 字符随机串），不可用其他工厂的 token 冒充
-- ❌ 丢失后需联系管理员重置（暂无自助找回，v5.3 计划支持）
+- ❌ 丢失后可用 `/recover_identity` 自助找回（v5.2.5 起支持）
+
+#### 🆕 v5.2.5 身份恢复端点（解决新对话身份丢失）
+
+> **解决场景**：Agent 新对话没读 identity.json、或文件丢失、或 access_token 忘记了。以下端点让 Agent 主动恢复身份。
+
+**端点 1：用 access_token 查询身份（推荐，access_token 还记得时）**
+
+```bash
+curl "http://118.196.34.217:8765/whoami?access_token=YOUR_ACCESS_TOKEN" \
+  -H "X-API-Key: lm-demo-2026"
+```
+
+返回 `supplier_id` + `company_name` + `mcp_endpoint`。Agent 拿到后立即写入 identity.json。
+
+**端点 2：用手机号+邮箱找回身份（identity.json 完全丢失时）**
+
+```bash
+curl -X POST "http://118.196.34.217:8765/recover_identity" \
+  -H "Content-Type: application/json" \
+  -d '{"phone": "13800138000", "email": "sales@factory.com"}'
+```
+
+返回新的 `access_token`（旧的失效）。Agent 必须立即写入 identity.json：
+```bash
+mkdir -p ~/.linkmoney
+cat > ~/.linkmoney/identity.json << EOF
+{
+  "supplier_id": "返回的 supplier_id",
+  "access_token": "返回的新 access_token",
+  "company_name": "工厂名",
+  "recovered_at": "恢复时间"
+}
+EOF
+```
+
+**新对话身份恢复流程**（Agent 必读）：
+
+1. 读 `~/.linkmoney/identity.json` → 拿到 supplier_id + access_token
+2. 如果文件不存在 → 问老板手机号和注册邮箱 → 调 `/recover_identity`
+3. 如果文件存在但 token 失效 → 问老板手机号和邮箱 → 调 `/recover_identity`
+4. 拿到身份后立即写入 identity.json（如果是恢复的，新 token 必须覆盖旧的）
 
 **身份文件不存在时的处理**：
 
-如果 `~/.linkmoney/identity.json` 不存在，Agent 应主动引导老板：
+如果 `~/.linkmoney/identity.json` 不存在，Agent 应：
 
-> 您还没有注册 LinkMoney。请告诉我您的公司全称、联系邮箱、联系电话、主营品类，我帮您注册并保存身份。
+1. 先问老板："您是否已经注册过 LinkMoney？"
+2. 如果已注册 → 问手机号和注册邮箱 → 调 `/recover_identity` 恢复身份
+3. 如果未注册 → 引导老板注册：
+   > 您还没有注册 LinkMoney。请告诉我您的公司全称、联系邮箱、联系电话、主营品类，我帮您注册并保存身份。
 
 ### 2.4 安全代理架构数据流
 

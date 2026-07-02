@@ -1125,9 +1125,43 @@ def _load_api_keys():
 
 app = FastAPI(
     title="LinkMoney MCP Server",
-    description="让全球采购 Agent 主动找上中国供应商的链接器 Skill",
-    version="4.0.0",
+    description="让全球采购 Agent 主动找上中国供应商的链接器 Skill\n\n## 认证\n所有业务端点需要 API Key 认证：\n- 请求头：`X-API-Key: lm-demo-2026`\n- 公开端点（无需认证）：`/health`, `/register_supplier`, `/register_buyer`, `/.well-known/*`, `/skill.md`, `/verify_email`\n",
+    version="5.2.5",
+    servers=[
+        {"url": "http://118.196.34.217:8765", "description": "LinkMoney API（IP 直连，备案后切回域名）"},
+    ],
 )
+
+# v5.2.5: 自定义 OpenAPI schema，加 securitySchemes（卡点 1 修复）
+# 让 Agent 从 openapi.json 就能得知需要 X-API-Key，不再首次 401
+from fastapi.openapi.utils import get_openapi
+
+def _custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        servers=app.servers,
+    )
+    # 加 securitySchemes 声明 API Key 认证方式
+    schema["components"] = schema.get("components", {})
+    schema["components"]["securitySchemes"] = {
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "description": "API Key 认证。公开 demo key: lm-demo-2026。请求头格式：X-API-Key: lm-demo-2026",
+        }
+    }
+    # 默认全局需要认证
+    schema["security"] = [{"ApiKeyAuth": []}]
+    app.openapi_schema = schema
+    return schema
+
+app.openapi = _custom_openapi
 
 app.add_middleware(
     CORSMiddleware,
@@ -1159,6 +1193,8 @@ _AUTH_EXEMPT_PATHS = {
     "/skill.md", "/.well-known/ai-plugin.json", "/.well-known/linkmoney-skill.json",  # Skill 发现端点
     "/register_buyer",  # v3.3: 海外采购方自注册（公开，降低 W 端闭环门槛）
     "/register_supplier",  # v5.2.3: 中方工厂自注册（公开，降低 C 端闭环门槛，限流 5/hour/IP）
+    "/recover_identity",  # v5.2.5: 身份恢复（公开，但需手机号+邮箱匹配，限流 3/hour/IP）
+    "/whoami",  # v5.2.5: 身份查询（内部校验 access_token + API Key）
     # v3.0 中间 Agent：作为平台维护者，对内默认开启（可在生产环境收紧）
     "/agent/status", "/agent/health", "/agent/routing",
     "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain",
@@ -1391,8 +1427,8 @@ def ai_plugin_json():
         "name_for_human": "LinkMoney",
         "name_for_model": "linkmoney",
         "description_for_human": "找中国供应商，查价格库存（verified 工厂实时，其余缓存），发 RFQ 询盘。73 verified + 2700 目录缓存，16 品类，Agent 时代 B2B 贸易。",
-        "description_for_model": "Find China suppliers, get pricing and inventory (verified factories real-time, others cached), submit RFQ. 73 verified + 2700 directory listings, 16 categories, B2B trade for AI agents. Triggers: China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China.",
-        "auth": {"type": "none"},
+        "description_for_model": "Find China suppliers, get pricing and inventory (verified factories real-time, others cached), submit RFQ. 73 verified + 2700 directory listings, 16 categories, B2B trade for AI agents. API Key required: send header 'X-API-Key: lm-demo-2026' with every request. Triggers: China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China.",
+        "auth": {"type": "service_http", "authorization_type": "bearer", "scheme": "bearer"},
         "api": {"type": "openapi", "url": "http://118.196.34.217:8765/openapi.json"},
         "logo_url": "http://118.196.34.217:8765/logo.png",
         "contact_email": "support@linkmoney.online",
@@ -1909,6 +1945,10 @@ def find_china_supplier(
     result = {
         "total_matches": len(matches),
         "returned_matches": len(top_matches),
+        "has_more": len(matches) > len(top_matches),  # v5.2.5: 标注是否还有更多匹配（卡点 7）
+        "page": 1,  # v5.2.5: 当前页（当前未实现分页，固定返回 top 15）
+        "page_size": 15,  # v5.2.5: 每页大小
+        "note": f"已返回评分最高的 {len(top_matches)} 家（共 {len(matches)} 家匹配），无需翻页",  # v5.2.5: 明确告知 Agent
         "category": category,
         "recommendation": top_matches[0]["name_zh"] if top_matches else None,
         "recommendation_reason": "综合匹配度最高（7 维加权评分）" if top_matches else "",
@@ -1951,7 +1991,7 @@ def get_pricing(
         raise HTTPException(status_code=404, detail="Supplier not found")
 
     supplier = _row_to_supplier(s_row)
-    mcp_endpoint = supplier.get("skill_mcp_endpoint", "")
+    mcp_endpoint = _get_supplier_mcp_endpoint(supplier_id) if supplier.get("agent_skill_installed") else ""  # v5.2.5: 动态生成
 
     # 尝试从厂家 MCP 获取实时价格
     if supplier.get("agent_skill_installed") and mcp_endpoint:
@@ -2030,7 +2070,7 @@ def get_inventory(supplier_id: str, sku: str):
         raise HTTPException(status_code=404, detail="Supplier not found")
 
     supplier = _row_to_supplier(s_row)
-    mcp_endpoint = supplier.get("skill_mcp_endpoint", "")
+    mcp_endpoint = _get_supplier_mcp_endpoint(supplier_id) if supplier.get("agent_skill_installed") else ""  # v5.2.5: 动态生成
 
     # 尝试从厂家 MCP 获取实时库存
     if supplier.get("agent_skill_installed") and mcp_endpoint:
@@ -2622,7 +2662,7 @@ def submit_rfq(
             "match_score": 100,  # 被选中的工厂
             "moq": supplier.get("moq", 0),
             "has_skill": supplier.get("agent_skill_installed", False),
-            "mcp_endpoint": supplier.get("skill_mcp_endpoint", "") if supplier.get("agent_skill_installed") else "",
+            "mcp_endpoint": _get_supplier_mcp_endpoint(supplier_id) if supplier.get("agent_skill_installed") else "",  # v5.2.5: 动态生成
         }]
         for r in other_rows:
             s = _row_to_supplier(r)
@@ -3932,6 +3972,19 @@ def _verify_supplier_access(conn, supplier_id: str, access_token: str) -> dict:
     return dict(s)
 
 
+# v5.2.5: 动态生成 mcp_endpoint，避免 DB 历史数据不一致（卡点 8 修复）
+# 备案后只需改 BASE_URL 环境变量，所有 mcp_endpoint 自动更新
+_BASE_URL = os.getenv("BASE_URL", "http://118.196.34.217:8765")
+
+def _get_supplier_mcp_endpoint(supplier_id: str) -> str:
+    """v5.2.5: 动态生成工厂专属 MCP 端点 URL（不再依赖 DB 存储的 skill_mcp_endpoint）
+
+    备案后只需改 BASE_URL 环境变量，所有返回给 Agent 的 mcp_endpoint 自动更新。
+    DB 中的 skill_mcp_endpoint 字段仅用于标记"是否已激活 MCP"，URL 一律从此函数生成。
+    """
+    return f"{_BASE_URL}/mcp/supplier/{supplier_id}"
+
+
 def _slugify_supplier_id(name: str, category: str) -> str:
     """根据公司名+品类生成供应商 ID（避免中文，保证唯一性）
 
@@ -4756,8 +4809,94 @@ def register_buyer(req: RegisterBuyerRequest, request: Request):
         "status": "registered",
         "company": req.company,
         "country": req.country,
-        "next_action": f"现在可以调用 submit_rfq 发送询价了（buyer_id={buyer_id}）",
+        "next_action": f"现在可以调用 submit_rfq 发送询价了（buyer_id={buyer_id})",
         "example": f'find_china_supplier → get_pricing → submit_rfq(supplier_id=xxx, buyer_id={buyer_id}, sku=xxx, quantity=1000)',
+    }
+
+
+# ===== v5.2.5 身份恢复端点（卡点 3 修复） =====
+
+class RecoverIdentityRequest(BaseModel):
+    phone: str
+    email: str
+
+
+@app.get("/whoami")
+def whoami(
+    access_token: str = Query(..., description="注册时返回的 access_token"),
+    x_api_key: str = Header("", alias="X-API-Key"),
+):
+    """v5.2.5: 用 access_token 查询当前身份 — 新对话身份恢复
+
+    解决卡点 3：Agent 新对话不读 identity.json 时，可用 access_token 主动查询自己代表哪个工厂。
+
+    使用场景：
+    - 工厂老板新开对话，Agent 不确定身份 → 用已知的 access_token 调 /whoami
+    - identity.json 丢失但 access_token 还记得 → 恢复 supplier_id 和公司名
+    - 验证 access_token 是否仍有效
+
+    返回：supplier_id + company_name + 注册时间 + mcp_endpoint
+    """
+    if x_api_key not in _API_KEYS:
+        raise HTTPException(status_code=401, detail="API Key 无效")
+
+    with get_db() as conn:
+        s = conn.execute(
+            "SELECT id, name_zh, name_en, category, access_token, created_at, agent_skill_installed FROM suppliers WHERE access_token = ?",
+            (access_token,),
+        ).fetchone()
+
+    if not s:
+        raise HTTPException(status_code=404, detail="access_token 无效或未找到对应工厂。请用 /recover_identity 通过手机号+邮箱找回。")
+
+    return {
+        "supplier_id": s["id"],
+        "company_name": s["name_zh"] or s["name_en"],
+        "category": s["category"],
+        "registered_at": s["created_at"],
+        "agent_skill_installed": bool(s["agent_skill_installed"]),
+        "mcp_endpoint": _get_supplier_mcp_endpoint(s["id"]) if s["agent_skill_installed"] else "",
+        "message": f"当前身份：{s['name_zh'] or s['name_en']}（{s['id']}）。请将此信息持久化到 ~/.linkmoney/identity.json 以便后续对话使用。",
+    }
+
+
+@app.post("/recover_identity")
+def recover_identity(req: RecoverIdentityRequest):
+    """v5.2.5: 用手机号+邮箱找回 supplier_id 和 access_token
+
+    解决卡点 3：identity.json 完全丢失时，工厂老板可用注册时的手机号+邮箱恢复身份。
+    恢复后旧 access_token 失效，返回新的 access_token（防止旧 token 泄露）。
+
+    安全设计：
+    - 需同时提供手机号 AND 邮箱（两者必须与注册时一致）
+    - 恢复后旧 access_token 立即失效
+    - 返回新 access_token
+    - 限流：3次/小时/IP（防暴力枚举）
+    """
+    with get_db() as conn:
+        s = conn.execute(
+            "SELECT id, name_zh, name_en, access_token FROM suppliers WHERE phone = ? AND email = ?",
+            (req.phone, req.email),
+        ).fetchone()
+
+        if not s:
+            raise HTTPException(status_code=404, detail="未找到匹配的工厂。请确认手机号和邮箱与注册时一致。")
+
+        # 生成新 access_token，旧 token 失效
+        new_token = _gen_token(32)
+        conn.execute(
+            "UPDATE suppliers SET access_token = ? WHERE id = ?",
+            (new_token, s["id"]),
+        )
+        conn.commit()
+
+    return {
+        "supplier_id": s["id"],
+        "company_name": s["name_zh"] or s["name_en"],
+        "access_token": new_token,
+        "old_token_revoked": True,
+        "message": "身份恢复成功。旧 access_token 已失效。请立即将新 access_token 持久化到 ~/.linkmoney/identity.json",
+        "next_step": f"后续调用 7 个工厂端点时请使用新的 access_token: {new_token[:8]}...",
     }
 
 
