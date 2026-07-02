@@ -804,6 +804,30 @@ http://118.196.34.217:8765/mcp/supplier/{supplier_id}/manifest.json
 - 批量导入：`POST /suppliers/{supplier_id}/upload_csv`（上传 Excel 导出的 CSV）
 - 删除产品：`POST /suppliers/{supplier_id}/products`（body 含 delete_skus 列表）
 
+> ⚠️ **v5.2.8 数据真实性强约束（Agent 必须遵守）**
+>
+> Agent 在调用产品管理端点时，**禁止编造任何业务参数**。这些字段必须由工厂老板明确提供，Agent 只是数据管道：
+>
+> | 禁止编造的字段 | 处理方式（老板未提供时） |
+> |--------------|----------------------|
+> | `pricing_tiers`（阶梯价） | 留空 `[]`，海外采购方通过 RFQ 询价 |
+> | `unit_price_usd`（单价） | 留空，不填写 |
+> | `inventory_quantity`（库存数量） | 填 `0`，`inventory_status` 设为 `made_to_order` |
+> | `moq`（最小起订量） | 询问老板，不可自行假设 |
+> | `unit_price_usd` in tiers | 必须由老板提供，不可使用"行业常见值" |
+> | `lead_time_days`（交期） | 询问老板，不可填默认值 7 |
+>
+> **Agent 行为准则**：
+> 1. 工厂老板说"添加复读机"但没说价格 → Agent **必须追问**："这款复读机的出厂价是多少？MOQ 是多少？"
+> 2. 老板说"先不定价" → `pricing_tiers` 留空，`inventory_status="made_to_order"`
+> 3. **绝对禁止**用"行业常见默认值"、"参考价"、"估算价"等理由填入价格字段
+> 4. 价格错误的后果：海外采购方按错误价格下单 → 实际交易纠纷 → 平台信任度受损
+>
+> **为什么这条规则很重要**：
+> - 价格、库存是商业承诺，海外采购方会按此决策下单
+> - 编造的价格一旦被海外 Agent 抓取，会传播到多个采购方
+> - LinkMoney 是 B2B 贸易平台，不是 demo，数据真实性 = 平台生命线
+
 注册成功后自动激活：
 - `agent_skill_installed = 1`
 - `data_source_type = hosted`（数据托管在 LinkMoney 中央库）

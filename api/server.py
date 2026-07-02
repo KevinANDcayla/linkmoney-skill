@@ -5364,11 +5364,30 @@ def update_supplier_products(supplier_id: str, req: UpdateProductsRequest):
         now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         upserted = 0
         deleted = 0
+        warnings = []  # v5.2.8: 数据真实性审计 — 记录哪些字段用了默认值（可能是 Agent 编造）
 
         # 3. upsert 产品
         for p in req.upsert:
             # 兼容 dict 和 ProductItem 对象
             get = (lambda k: p.get(k, "") if isinstance(p, dict) else getattr(p, k, ""))
+            sku = get("sku")
+            # v5.2.8: 审计 — 检测可能被 Agent 编造的业务字段
+            pricing_tiers = get("pricing_tiers") or []
+            if not pricing_tiers:
+                warnings.append(f"SKU {sku}: pricing_tiers 为空 — 海外采购方需通过 RFQ 询价")
+            else:
+                # 记录价格写入审计日志（便于后续追溯）
+                logger.info(f"[AUDIT] supplier={supplier_id} sku={sku} pricing_tiers={pricing_tiers} — 数据由 Agent 上传，须工厂确认")
+            moq_val = get("moq")
+            if not moq_val:
+                warnings.append(f"SKU {sku}: moq 未设置（默认 1），请工厂老板确认实际 MOQ")
+            inv_qty = get("inventory_quantity")
+            if inv_qty in (None, "", 0):
+                if get("inventory_status") != "made_to_order":
+                    warnings.append(f"SKU {sku}: inventory_quantity=0 但 inventory_status 非 made_to_order — 可能误导采购方")
+            lead_time = get("inventory_lead_time_days")
+            if lead_time in (None, "", 0):
+                warnings.append(f"SKU {sku}: lead_time_days 未设置 — 海外采购方无法估算交期")
             conn.execute("""
                 INSERT OR REPLACE INTO products(
                     supplier_id, sku, name_zh, name_en, category, material, grade,
@@ -5381,13 +5400,13 @@ def update_supplier_products(supplier_id: str, req: UpdateProductsRequest):
                     status, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                supplier_id, get("sku"), get("name_zh"), get("name_en"),
+                supplier_id, sku, get("name_zh"), get("name_en"),
                 "", get("material"), get("grade"),
                 json.dumps(get("specs") or {}, ensure_ascii=False),
-                json.dumps(get("pricing_tiers") or [], ensure_ascii=False),
-                get("moq") or 1, get("trade_terms") or "FOB", get("port") or "",
+                json.dumps(pricing_tiers, ensure_ascii=False),
+                moq_val or 1, get("trade_terms") or "FOB", get("port") or "",
                 get("price_currency") or "USD", get("trade_terms") or "FOB", get("price_unit") or "pc",
-                get("inventory_status") or "in_stock", get("inventory_quantity") or 0, get("inventory_unit") or "pc", get("inventory_lead_time_days") or 7,
+                get("inventory_status") or "in_stock", inv_qty or 0, get("inventory_unit") or "pc", lead_time or 0,
                 get("hs_code") or "", get("payment_terms") or "", get("sample_available") or 0, get("customized") or 0,
                 json.dumps(get("certifications") or [], ensure_ascii=False),
                 get("packaging_details") or "", get("supply_ability_monthly") or 0,
@@ -5410,7 +5429,9 @@ def update_supplier_products(supplier_id: str, req: UpdateProductsRequest):
         "supplier_id": supplier_id,
         "upserted": upserted,
         "deleted": deleted,
+        "warnings": warnings,  # v5.2.8: 数据真实性审计 — Agent 应将 warnings 反馈给工厂老板确认
         "message": f"产品已更新：新增/修改 {upserted} 个，删除 {deleted} 个。海外 Agent 可立即查询。",
+        "data_integrity_notice": "价格/库存/MOQ 必须由工厂老板提供，Agent 不得编造。如有 warnings，请老板逐项确认。",
     }
 
 
