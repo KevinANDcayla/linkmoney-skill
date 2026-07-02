@@ -5,7 +5,6 @@ description: |
 
   【C 端（中国制造业老板侧）】 5 维 AI 出海 Agent 化评估 + 一键注册入驻（托管 MCP，零部署）+ 对话式产品管理
   【W 端（海外采购方侧）】 一键找中国工厂（73 家 verified + 2700 家目录缓存，16 品类：紧固件/电子/纺织/包装/机械/五金/注塑/汽配/家具/建材/化工/医疗/照明/运动/食品/玩具），查价格库存，5 秒发 RFQ。
-  【Agent Marketplace】 公开 RFQ 市场、多供应商竞价对比、9 阶段执行仪表盘、公正 Agent 审计记录（含哈希指纹）
   【LLM 辅助层】 火山引擎豆包模型集成（国内云服务，数据不出境），用于多语言翻译、RFQ 解析、工厂数据提取；未配置 API Key 时自动降级为规则引擎，不影响核心功能
 
   ⚠️ 数据外泄风险告知（请用户知悉）：
@@ -180,29 +179,7 @@ r = requests.post(f"{BASE}/submit_rfq", headers=HEADERS, json={
 | `submit_rfq` | 提交 RFQ 到中国供应商（自动邮件通知） | 询盘内容 + 供应商 ID + 联系人 | RFQ 状态 + 邮件已通知供应商 |
 | `send_quote` | 供应商对 RFQ 报价并邮件通知采购方 | RFQ ID + 供应商 ID + 报价 | 报价状态 + 邮件已通知采购方 |
 
-### 1.3 Agent Marketplace（15 个 Tools，公开 RFQ 市场）
-
-> 公开的 B2B 询价竞价市场：采购方发布 RFQ → 多供应商竞价 → 选定中标 → 9 阶段执行跟踪 → 公正 Agent 审计。所有关键操作写入含哈希指纹的公正记录，确保交易可追溯、不可篡改。
-
-| Tool | 描述 | 输入 | 输出 |
-|------|------|------|------|
-| `marketplace_stats` | Marketplace 全局统计 | — | RFQ 总数、活跃数、完成数、供应商参与数 |
-| `list_agents` | 列出所有参与方 Agent | type 筛选（buyer/supplier/notary） | Agent 列表 |
-| `get_agent` | Agent 详情 | agent_id | Agent 详情 |
-| `list_rfqs` | RFQ 市场列表 | status / category 筛选 | RFQ 列表 |
-| `get_rfq` | RFQ 详情（含报价 + 阶段 + 记录） | rfq_id | RFQ 完整信息 |
-| `create_rfq` | 创建 RFQ（自动写入公正记录） | RFQ 内容 | rfq_id + 公正记录 |
-| `list_quotes` | RFQ 的所有报价 | rfq_id | 报价列表 |
-| `create_quote` | 提交报价（自动写入公正记录） | rfq_id + 报价内容 | quote_id + 公正记录 |
-| `select_winner` | 选定中标供应商（自动建 9 阶段 + 公正记录） | rfq_id + supplier_id | 9 阶段 + 公正记录 |
-| `list_stages` | RFQ 的 9 阶段执行进度 | rfq_id | 阶段列表 |
-| `update_stage` | 更新阶段状态（自动写入公正记录） | stage_id + status | 更新结果 + 公正记录 |
-| `list_records` | 公正记录列表（含指纹哈希） | rfq_id 筛选 | 公正记录列表 |
-| `get_record` | 公正记录详情 | record_id | 记录详情 + 哈希指纹 |
-| `list_dashboard` | 仪表盘聚合数据 | — | 全局仪表盘 |
-| `get_dashboard` | 单个 RFQ 仪表盘 | rfq_id | RFQ 仪表盘 |
-
-### 1.4 LLM 辅助层（火山引擎豆包，国内云服务，数据不出境）
+### 1.3 LLM 辅助层（火山引擎豆包，国内云服务，数据不出境）
 
 > 使用火山引擎豆包模型（ARK API）进行多语言翻译、RFQ 解析、工厂数据提取。**火山引擎是字节跳动国内云服务，数据不出境，符合国内合规要求。** 未配置 `ARK_API_KEY` 时自动降级为规则引擎，不影响核心功能。可通过 `LLM_ENABLED=false` 完全禁用。
 

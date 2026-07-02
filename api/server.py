@@ -1219,7 +1219,7 @@ async def auth_and_logging_middleware(request: Request, call_next):
         or path.startswith("/docs")
         or path.startswith("/openapi")
         or path == "/health"
-        or path.startswith("/marketplace/")   # v4.0 Agent Marketplace 公开端点
+        # v5.2.6: Agent Marketplace 已移除，不再需要 /marketplace/ 认证旁路
         or path.startswith("/mcp/supplier/")  # v3.3 工厂托管 MCP 端点（公开，海外 Agent 直接调用）
     )
     if not is_exempt:
@@ -6021,26 +6021,28 @@ def agent_maintain(
 _load_api_keys()
 init_db()
 
-# v4.0: Agent Marketplace（延迟导入，避开循环依赖）
+# v5.2.6: Agent Marketplace 已移除（双方 Agent 不会同时在 marketplace，不符合实际 B2B 场景）
+# 真正的闭环是：find_china_supplier → get_pricing → submit_rfq → 邮件通知 → send_quote
+# marketplace.py 文件保留但不挂载路由，以备将来需要
 marketplace_router = None
 init_marketplace = lambda: None
-try:
-    import marketplace as _marketplace
-    marketplace_router = _marketplace.router
-    init_marketplace = _marketplace.init_marketplace
-    logger.info("✅ Agent Marketplace 模块加载成功")
-except Exception as _me:
-    import traceback as _tb
-    logger.warning(f"⚠️ Agent Marketplace 模块加载失败: {_me}\n{_tb.format_exc()}")
+# try:
+#     import marketplace as _marketplace
+#     marketplace_router = _marketplace.router
+#     init_marketplace = _marketplace.init_marketplace
+#     logger.info("✅ Agent Marketplace 模块加载成功")
+# except Exception as _me:
+#     import traceback as _tb
+#     logger.warning(f"⚠️ Agent Marketplace 模块加载失败: {_me}\n{_tb.format_exc()}")
 
-# v4.0: 初始化 Agent Marketplace（公开 RFQ 市场 + 9 阶段执行 + 公正审计）
-try:
-    init_marketplace()
-    if marketplace_router is not None:
-        app.include_router(marketplace_router)
-        logger.info("✅ Agent Marketplace 路由已挂载（/marketplace/*）")
-except Exception as _e:  # noqa: BLE001
-    logger.warning(f"Agent Marketplace 初始化失败: {_e}")
+# v5.2.6: Agent Marketplace 路由不再挂载
+# try:
+#     init_marketplace()
+#     if marketplace_router is not None:
+#         app.include_router(marketplace_router)
+#         logger.info("✅ Agent Marketplace 路由已挂载（/marketplace/*）")
+# except Exception as _e:  # noqa: BLE001
+#     logger.warning(f"Agent Marketplace 初始化失败: {_e}")
 
 # v3.0: 启动时基线巡检一次，写入告警 + 维护日志
 try:

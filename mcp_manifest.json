@@ -25,12 +25,11 @@
     {"name": "stats", "description": "Global statistics", "endpoint": "GET /stats", "auth_required": true}
   ],
   "platform": {
-    "tools_total": 43,
+    "tools_total": 28,
     "breakdown": {
       "public": 13,
       "chinese": 8,
-      "internal": 7,
-      "marketplace": 15
+      "internal": 7
     },
     "chinese_tools": [
       {"name": "evaluate_sme", "endpoint": "/evaluate_sme", "purpose": "5 维评估中国制造业 AI 出海 Agent 化水平"},
@@ -50,23 +49,6 @@
       {"name": "agent_maintenance", "endpoint": "/agent/maintenance", "purpose": "维护动作日志"},
       {"name": "agent_optimize", "endpoint": "/agent/optimize", "purpose": "自我优化报告（每周生成）"},
       {"name": "agent_maintain", "endpoint": "/agent/maintain", "purpose": "一键执行维护（健康检查+路由+告警+优化）"}
-    ],
-    "marketplace_tools": [
-      {"name": "marketplace_stats", "endpoint": "/marketplace/stats", "purpose": "Agent Marketplace 全局统计"},
-      {"name": "list_agents", "endpoint": "/marketplace/agents", "purpose": "列出所有 Agent（采购方/工厂/公正官）"},
-      {"name": "get_agent", "endpoint": "/marketplace/agents/{id}", "purpose": "Agent 详情"},
-      {"name": "list_rfqs", "endpoint": "/marketplace/rfqs", "purpose": "RFQ 市场列表（支持状态/品类筛选）"},
-      {"name": "get_rfq", "endpoint": "/marketplace/rfqs/{id}", "purpose": "RFQ 详情（含报价 + 阶段 + 记录）"},
-      {"name": "create_rfq", "endpoint": "/marketplace/rfqs", "purpose": "创建 RFQ（自动写入公正记录）"},
-      {"name": "list_quotes", "endpoint": "/marketplace/rfqs/{id}/quotes", "purpose": "RFQ 的所有报价"},
-      {"name": "create_quote", "endpoint": "/marketplace/rfqs/{id}/quotes", "purpose": "提交报价（自动写入公正记录）"},
-      {"name": "select_winner", "endpoint": "/marketplace/rfqs/{id}/winner", "purpose": "选定中标供应商（自动建 9 阶段 + 公正记录）"},
-      {"name": "list_stages", "endpoint": "/marketplace/rfqs/{id}/stages", "purpose": "RFQ 的 9 阶段执行进度"},
-      {"name": "update_stage", "endpoint": "/marketplace/stages/{id}", "purpose": "更新阶段状态（自动写入公正记录）"},
-      {"name": "list_records", "endpoint": "/marketplace/records", "purpose": "公正记录列表（含指纹哈希）"},
-      {"name": "get_record", "endpoint": "/marketplace/records/{id}", "purpose": "公正记录详情"},
-      {"name": "list_dashboard", "endpoint": "/marketplace/dashboard", "purpose": "仪表盘聚合数据"},
-      {"name": "get_dashboard", "endpoint": "/marketplace/dashboard/{rfq_id}", "purpose": "单个 RFQ 仪表盘"}
     ]
   },
   "hosted_mcp": {
