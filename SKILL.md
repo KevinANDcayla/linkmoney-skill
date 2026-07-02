@@ -344,102 +344,118 @@ export LLM_ENABLED=false
 - **即时生效**：注册成功 = 海外可见（trust_score 初始较低，补全资料 + 验证营业执照后提升排名）
 - **对话式管理**：后续增删改产品通过 `update_products` / `upload_products_csv` 对话完成
 
-#### 🆕 v5.2.4 Agent 身份持久化（跨对话识别工厂）
+#### 🆕 v5.2.7 Agent 身份持久化（长期记忆 + 三层身份保障）
 
-> **核心问题**：Agent 每次对话是无状态的，新对话里不知道自己代表哪个工厂。以下约定确保 Agent 跨对话能正确识别身份，不会误操作其他工厂。
+> **核心问题**：Agent 每次对话是无状态的，新对话里不知道自己代表哪个工厂。旧方案 identity.json 有致命缺陷 — 同一台电脑两个老板会互相误用 token。v5.2.7 改用**长期记忆 + agent_id/agent_key** 解决。
 
-**注册成功后，Agent 必须立即持久化身份**：
+**注册成功后，返回 4 个身份凭证**：
 
-注册响应会返回 `supplier_id` 和 `access_token`。Agent 必须把它们写入本地文件：
-
-```bash
-# Agent 注册成功后执行（用 shell 命令或等效文件写入）
-mkdir -p ~/.linkmoney
-cat > ~/.linkmoney/identity.json << EOF
+```json
 {
-  "supplier_id": "注册返回的 supplier_id",
-  "access_token": "注册返回的 access_token",
-  "company_name": "工厂名",
-  "registered_at": "注册时间"
+  "supplier_id": "fastener-cn1292b572",
+  "access_token": "32字符随机串",     // 方式 1：向后兼容
+  "agent_id": "agent-fastener-cn1-xx", // 方式 2：Agent 凭证 ID（存长期记忆）
+  "agent_key": "32字符随机串",         // 方式 2：Agent 凭证密钥（存长期记忆）
 }
-EOF
 ```
 
-**新对话开始时，Agent 必须先读取身份文件**：
+**Agent 必须立即将身份存入长期记忆**：
 
-当老板说"添加产品"、"查 RFQ"、"改价格"等需要身份的操作时，Agent 应先执行：
+注册返回 `agent_id` + `agent_key` 后，Agent 应使用宿主的长期记忆机制持久化（不要只存文件）：
+
+| Agent 宿主 | 长期记忆方式 |
+|-----------|------------|
+| Trae | project_memory.md / user_profile.md |
+| Claude Code | CLAUDE.md |
+| Cursor | .cursorrules |
+| ChatGPT | Custom Instructions / Memory |
+| 其他 | identity.json（兜底） |
+
+**推荐存储内容**：
+
+```
+linkmoney_identity:
+  supplier_id: fastener-cn1292b572
+  agent_id: agent-fastener-cn1-xx
+  agent_key: 32字符随机串
+  company_name: 宁波新锐紧固件有限公司
+  registered_at: 2026-07-02T12:00:00Z
+```
+
+**新对话开始时，Agent 必须先确认身份**：
+
+```
+1. 检查长期记忆是否有 linkmoney_identity
+2. 如果有 → 直接使用 agent_id + agent_key（无需读文件）
+3. 如果无 → 询问老板："您是哪个工厂的？" → 调 /lookup_supplier 查 supplier_id
+4. 如果老板说没注册过 → 引导注册
+```
+
+**7 个写操作端点的身份携带方式**（两种方式任选其一）：
+
+| 端点 | 方式 1（旧） | 方式 2（新，推荐） |
+|------|------------|------------------|
+| `POST /suppliers/{id}/products` | body 加 `"access_token"` | body 加 `"agent_id"` + `"agent_key"` |
+| `POST /suppliers/{id}/upload_csv` | header `X-Access-Token` | header `X-Agent-Id` + `X-Agent-Key` |
+| `GET /get_my_rfqs` | query `&access_token=` | query `&agent_id=&agent_key=` |
+| `POST /send_quote` | body 加 `"access_token"` | body 加 `"agent_id"` + `"agent_key"` |
+| `POST /bid_on_requirement` | body 加 `"access_token"` | body 加 `"agent_id"` + `"agent_key"` |
+| `POST /suppliers/{id}/link_mcp` | body 加 `"access_token"` | body 加 `"agent_id"` + `"agent_key"` |
+| `POST /suppliers/{id}/unlink_mcp` | body 加 `"access_token"` | body 加 `"agent_id"` + `"agent_key"` |
+
+**凭证特性**：
+- ✅ 长期有效，不随邮箱验证失效
+- ✅ agent_id + agent_key 是一对，必须配对使用
+- ✅ 与 supplier_id 绑定，是工厂的唯一身份凭证
+- ✅ 两种验证方式任一通过即可（向后兼容）
+- ❌ 不可猜测（32 字符随机串），不可冒充
+- ❌ 丢失后可用 `/recover_identity` 自助找回（旧凭证失效）
+
+#### 🆕 v5.2.7 身份恢复端点（3 个端点，覆盖所有场景）
+
+> **解决场景**：长期记忆丢失、或新 Agent 实例、或需确认身份。3 个端点覆盖所有恢复场景。
+
+**端点 1：用 agent_id + agent_key 查询身份（推荐，长期记忆有时）**
 
 ```bash
-cat ~/.linkmoney/identity.json
+curl "http://118.196.34.217:8765/whoami?agent_id=YOUR_AGENT_ID&agent_key=YOUR_AGENT_KEY" \
+  -H "X-API-Key: lm-demo-2026"
 ```
 
-读取到 `supplier_id` 和 `access_token` 后，在后续所有调用中携带：
-
-| 端点 | 身份携带方式 |
-|------|------------|
-| `POST /suppliers/{supplier_id}/products` | body 加 `"access_token": "xxx"` |
-| `POST /suppliers/{supplier_id}/upload_csv` | 请求头 `X-Access-Token: xxx` 或 query `?access_token=xxx` |
-| `GET /get_my_rfqs?supplier_id=xxx` | query 加 `&access_token=xxx` |
-| `POST /send_quote` | body 加 `"access_token": "xxx"` |
-| `POST /bid_on_requirement` | body 加 `"access_token": "xxx"` |
-| `POST /suppliers/{supplier_id}/link_mcp` | body 加 `"access_token": "xxx"` |
-| `POST /suppliers/{supplier_id}/unlink_mcp` | body 加 `"access_token": "xxx"` |
-
-**access_token 的特性**：
-- ✅ 长期有效，不随邮箱验证失效（区别于旧的 verification_token）
-- ✅ 与 supplier_id 绑定，是工厂的唯一身份凭证
-- ❌ 不可猜测（32 字符随机串），不可用其他工厂的 token 冒充
-- ❌ 丢失后可用 `/recover_identity` 自助找回（v5.2.5 起支持）
-
-#### 🆕 v5.2.5 身份恢复端点（解决新对话身份丢失）
-
-> **解决场景**：Agent 新对话没读 identity.json、或文件丢失、或 access_token 忘记了。以下端点让 Agent 主动恢复身份。
-
-**端点 1：用 access_token 查询身份（推荐，access_token 还记得时）**
-
+也支持 access_token 查询：
 ```bash
 curl "http://118.196.34.217:8765/whoami?access_token=YOUR_ACCESS_TOKEN" \
   -H "X-API-Key: lm-demo-2026"
 ```
 
-返回 `supplier_id` + `company_name` + `mcp_endpoint`。Agent 拿到后立即写入 identity.json。
+返回 `supplier_id` + `company_name` + `agent_id` + `mcp_endpoint`。Agent 拿到后立即存入长期记忆。
 
-**端点 2：用手机号+邮箱找回身份（identity.json 完全丢失时）**
+**端点 2：用公司名/手机号查询 supplier_id（新 Agent 实例时确认身份）**
+
+```bash
+curl "http://118.196.34.217:8765/lookup_supplier?q=宁波新锐" \
+  -H "X-API-Key: lm-demo-2026"
+```
+
+返回匹配的工厂列表（不返回凭证）。Agent 让老板确认是哪一家，然后用 supplier_id + 长期记忆里的 agent_id+agent_key 调写操作。
+
+**端点 3：用手机号+邮箱找回身份（长期记忆完全丢失时）**
 
 ```bash
 curl -X POST "http://118.196.34.217:8765/recover_identity" \
+  -H "X-API-Key: lm-demo-2026" \
   -H "Content-Type: application/json" \
   -d '{"phone": "13800138000", "email": "sales@factory.com"}'
 ```
 
-返回新的 `access_token`（旧的失效）。Agent 必须立即写入 identity.json：
-```bash
-mkdir -p ~/.linkmoney
-cat > ~/.linkmoney/identity.json << EOF
-{
-  "supplier_id": "返回的 supplier_id",
-  "access_token": "返回的新 access_token",
-  "company_name": "工厂名",
-  "recovered_at": "恢复时间"
-}
-EOF
-```
+返回新的 `access_token` + `agent_id` + `agent_key`（旧凭证全部失效）。Agent 必须立即存入长期记忆。
 
 **新对话身份恢复流程**（Agent 必读）：
 
-1. 读 `~/.linkmoney/identity.json` → 拿到 supplier_id + access_token
-2. 如果文件不存在 → 问老板手机号和注册邮箱 → 调 `/recover_identity`
-3. 如果文件存在但 token 失效 → 问老板手机号和邮箱 → 调 `/recover_identity`
-4. 拿到身份后立即写入 identity.json（如果是恢复的，新 token 必须覆盖旧的）
-
-**身份文件不存在时的处理**：
-
-如果 `~/.linkmoney/identity.json` 不存在，Agent 应：
-
-1. 先问老板："您是否已经注册过 LinkMoney？"
-2. 如果已注册 → 问手机号和注册邮箱 → 调 `/recover_identity` 恢复身份
-3. 如果未注册 → 引导老板注册：
-   > 您还没有注册 LinkMoney。请告诉我您的公司全称、联系邮箱、联系电话、主营品类，我帮您注册并保存身份。
+1. 检查长期记忆 → 有 agent_id + agent_key → 直接使用
+2. 长期记忆无 → 问老板"您是哪个工厂的？" → 调 `/lookup_supplier` 查 supplier_id
+3. 老板说没注册过 → 引导注册
+4. 老板说注册过但什么都不记得 → 问手机号和注册邮箱 → 调 `/recover_identity`
 
 ### 2.4 安全代理架构数据流
 

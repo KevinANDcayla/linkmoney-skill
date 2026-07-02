@@ -153,6 +153,8 @@ def _migrate_v21():
             ("outreach_reset_at", "TEXT DEFAULT ''"),
             ("data_source_type", "TEXT DEFAULT 'hosted'"),  # v3.3: hosted(托管)/self(自部署)/tunnel(隧道)
             ("access_token", "TEXT DEFAULT ''"),  # v5.2.4: 工厂身份凭证（长期有效，区别于 verification_token）
+            ("agent_id", "TEXT DEFAULT ''"),  # v5.2.7: Agent 凭证 ID（存长期记忆，与 agent_key 配对）
+            ("agent_key", "TEXT DEFAULT ''"),  # v5.2.7: Agent 凭证密钥（存长期记忆，与 agent_id 配对）
         ]:
             try:
                 c.execute(f"ALTER TABLE suppliers ADD COLUMN {col_name} {col_type}")
@@ -518,7 +520,9 @@ def init_db(force: bool = False):
                 outreach_used_this_month INTEGER DEFAULT 0,
                 outreach_reset_at TEXT DEFAULT '',
                 data_source_type TEXT DEFAULT 'hosted',
-                access_token TEXT DEFAULT ''
+                access_token TEXT DEFAULT '',
+                agent_id TEXT DEFAULT '',  # v5.2.7: Agent 凭证 ID
+                agent_key TEXT DEFAULT ''  # v5.2.7: Agent 凭证密钥
             )
         """)
 
@@ -3238,7 +3242,9 @@ def get_my_rfqs(
     """
     with get_db() as conn:
         # v5.2.4: 统一身份校验
-        s_row = _verify_supplier_access(conn, supplier_id, access_token)
+        s_row = _verify_supplier_access(conn, supplier_id, access_token,
+                                         request.headers.get("X-Agent-Id", "") or request.query_params.get("agent_id", ""),
+                                         request.headers.get("X-Agent-Key", "") or request.query_params.get("agent_key", ""))
 
     supplier = _row_to_supplier(s_row)
 
@@ -3334,6 +3340,8 @@ class QuoteRequest(BaseModel):
     rfq_id: str
     supplier_id: str
     access_token: str = ""  # v5.2.4: 工厂身份凭证
+    agent_id: str = ""  # v5.2.7: Agent 凭证 ID（存长期记忆）
+    agent_key: str = ""  # v5.2.7: Agent 凭证密钥（存长期记忆）
     unit_price_usd: float
     lead_time_days: int
     total_price_usd: float = 0
@@ -3350,7 +3358,7 @@ def send_quote(req: QuoteRequest, request: Request):
     """
     # v5.2.4: 统一身份校验
     with get_db() as conn:
-        _verify_supplier_access(conn, req.supplier_id, req.access_token)
+        _verify_supplier_access(conn, req.supplier_id, req.access_token, req.agent_id, req.agent_key)
 
     with get_db() as conn:
         rfq_row = conn.execute("SELECT * FROM rfqs WHERE id = ?", (req.rfq_id,)).fetchone()
@@ -3949,27 +3957,44 @@ def _gen_token(length: int = 32) -> str:
     return hashlib.sha256(os.urandom(length)).hexdigest()[:length]
 
 
-def _verify_supplier_access(conn, supplier_id: str, access_token: str) -> dict:
-    """v5.2.4: 统一校验工厂身份 — supplier_id + access_token 绑定。
+def _verify_supplier_access(conn, supplier_id: str, access_token: str = "", agent_id: str = "", agent_key: str = "") -> dict:
+    """v5.2.7: 统一校验工厂身份 — 支持 access_token 或 agent_id+agent_key 两种方式。
+
+    方式 1（旧，向后兼容）：access_token — 适合有文件系统的 Agent
+    方式 2（新，推荐）：agent_id + agent_key — 适合存长期记忆的 Agent
+
+    两种方式只要有一种通过即可，都不匹配则 401。
 
     Args:
         conn: SQLite 连接
         supplier_id: 供应商 ID
         access_token: 工厂长期身份凭证（注册时返回，不随邮箱验证失效）
+        agent_id: Agent 凭证 ID（v5.2.7，存长期记忆）
+        agent_key: Agent 凭证密钥（v5.2.7，存长期记忆，与 agent_id 配对使用）
 
     Returns:
         供应商行 dict（校验通过）
 
     Raises:
         HTTPException 404: 供应商不存在
-        HTTPException 401: access_token 缺失或错误
+        HTTPException 401: 身份验证失败
     """
     s = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
     if not s:
         raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
-    if not access_token or access_token != s["access_token"]:
-        raise HTTPException(status_code=401, detail="access_token 无效或缺失。请用注册时返回的 access_token 调用。")
-    return dict(s)
+
+    # 方式 1：access_token（向后兼容）
+    if access_token and access_token == s["access_token"]:
+        return dict(s)
+
+    # 方式 2：agent_id + agent_key（v5.2.7 新增，存长期记忆）
+    if agent_id and agent_key and agent_id == s["agent_id"] and agent_key == s["agent_key"]:
+        return dict(s)
+
+    raise HTTPException(
+        status_code=401,
+        detail="身份验证失败。请用注册时返回的 access_token 或 agent_id+agent_key 调用。"
+    )
 
 
 # v5.2.5: 动态生成 mcp_endpoint，避免 DB 历史数据不一致（卡点 8 修复）
@@ -4517,6 +4542,8 @@ def register_supplier(request: Request, req: RegisterSupplierRequest):
 
     verification_token = _gen_token(16)
     access_token = _gen_token(32)  # v5.2.4: 工厂长期身份凭证，不随邮箱验证失效
+    agent_id = f"agent-{supplier_id[:12]}-{_gen_token(4)}"  # v5.2.7: Agent 凭证 ID（存长期记忆）
+    agent_key = _gen_token(32)  # v5.2.7: Agent 凭证密钥（存长期记忆，与 agent_id 配对）
     now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # v3.3: 中心化托管 — 注册即自动生成 MCP endpoint，工厂无需自己部署
@@ -4574,8 +4601,8 @@ def register_supplier(request: Request, req: RegisterSupplierRequest):
                     agent_skill_installed, skill_mcp_endpoint, skill_platforms, skill_installs,
                     created_at, updated_at, contact_person, email, phone, wechat, language_contact,
                     email_verified, phone_verified, license_verified, trust_score, trust_level,
-                    verification_token, data_source_type, access_token
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    verification_token, data_source_type, access_token, agent_id, agent_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 supplier_id,
                 req.company_name, name_en, city, province, port,
@@ -4594,6 +4621,7 @@ def register_supplier(request: Request, req: RegisterSupplierRequest):
                 verification_token,
                 "hosted",
                 access_token,
+                agent_id, agent_key,  # v5.2.7: Agent 凭证
             ))
 
             # 写入 products（使用 INSERT OR REPLACE，防止 sku 重复时更新而非报错）
@@ -4714,6 +4742,8 @@ trust_score: {eval_result['overall_score']}
         "has_skill": True,
         "agent_skill_installed": True,
         "access_token": access_token,  # v5.2.4: 工厂长期身份凭证，后续所有写操作需携带
+        "agent_id": agent_id,  # v5.2.7: Agent 凭证 ID（存长期记忆）
+        "agent_key": agent_key,  # v5.2.7: Agent 凭证密钥（存长期记忆，与 agent_id 配对使用）
         "verification": {
             "email_verified": False,
             "phone_verified": False,
@@ -4823,70 +4853,133 @@ class RecoverIdentityRequest(BaseModel):
 
 @app.get("/whoami")
 def whoami(
-    access_token: str = Query(..., description="注册时返回的 access_token"),
+    access_token: str = Query("", description="注册时返回的 access_token（方式 1）"),
+    agent_id: str = Query("", description="注册时返回的 agent_id（方式 2，存长期记忆）"),
+    agent_key: str = Query("", description="注册时返回的 agent_key（方式 2，存长期记忆）"),
     x_api_key: str = Header("", alias="X-API-Key"),
 ):
-    """v5.2.5: 用 access_token 查询当前身份 — 新对话身份恢复
+    """v5.2.7: 查询当前身份 — 支持 access_token 或 agent_id+agent_key
 
-    解决卡点 3：Agent 新对话不读 identity.json 时，可用 access_token 主动查询自己代表哪个工厂。
+    解决卡点 3：Agent 新对话身份恢复。
 
     使用场景：
-    - 工厂老板新开对话，Agent 不确定身份 → 用已知的 access_token 调 /whoami
-    - identity.json 丢失但 access_token 还记得 → 恢复 supplier_id 和公司名
-    - 验证 access_token 是否仍有效
+    - 方式 1：access_token 查询（适合 identity.json 存的）
+    - 方式 2：agent_id+agent_key 查询（适合存长期记忆的）
+    - 验证凭证是否仍有效
 
-    返回：supplier_id + company_name + 注册时间 + mcp_endpoint
+    返回：supplier_id + company_name + agent_id + 注册时间 + mcp_endpoint
     """
     if x_api_key not in _API_KEYS:
         raise HTTPException(status_code=401, detail="API Key 无效")
 
     with get_db() as conn:
-        s = conn.execute(
-            "SELECT id, name_zh, name_en, category, access_token, created_at, agent_skill_installed FROM suppliers WHERE access_token = ?",
-            (access_token,),
-        ).fetchone()
+        s = None
+        # 方式 1：access_token
+        if access_token:
+            s = conn.execute(
+                "SELECT id, name_zh, name_en, category, access_token, agent_id, agent_key, created_at, agent_skill_installed FROM suppliers WHERE access_token = ?",
+                (access_token,),
+            ).fetchone()
+        # 方式 2：agent_id + agent_key
+        elif agent_id and agent_key:
+            s = conn.execute(
+                "SELECT id, name_zh, name_en, category, access_token, agent_id, agent_key, created_at, agent_skill_installed FROM suppliers WHERE agent_id = ? AND agent_key = ?",
+                (agent_id, agent_key),
+            ).fetchone()
 
     if not s:
-        raise HTTPException(status_code=404, detail="access_token 无效或未找到对应工厂。请用 /recover_identity 通过手机号+邮箱找回。")
+        raise HTTPException(status_code=404, detail="凭证无效或未找到对应工厂。请用 /recover_identity 通过手机号+邮箱找回。")
 
     return {
         "supplier_id": s["id"],
         "company_name": s["name_zh"] or s["name_en"],
         "category": s["category"],
+        "agent_id": s["agent_id"],
+        "access_token": s["access_token"],
         "registered_at": s["created_at"],
         "agent_skill_installed": bool(s["agent_skill_installed"]),
         "mcp_endpoint": _get_supplier_mcp_endpoint(s["id"]) if s["agent_skill_installed"] else "",
-        "message": f"当前身份：{s['name_zh'] or s['name_en']}（{s['id']}）。请将此信息持久化到 ~/.linkmoney/identity.json 以便后续对话使用。",
+        "message": f"当前身份：{s['name_zh'] or s['name_en']}（{s['id']}）。建议将 agent_id + agent_key 存入长期记忆以便后续对话使用。",
+    }
+
+
+@app.get("/lookup_supplier")
+def lookup_supplier(
+    q: str = Query(..., description="公司名或手机号（模糊匹配）"),
+    x_api_key: str = Header("", alias="X-API-Key"),
+):
+    """v5.2.7: 用公司名或手机号查询 supplier_id — 对话开始时确认身份
+
+    使用场景：
+    - 老板说"我是宁波新锐紧固件的" → Agent 调 /lookup_supplier?q=宁波新锐
+    - 返回匹配列表 → Agent 让老板确认是哪一家
+    - 确认后 Agent 用 supplier_id + 长期记忆里的 agent_id+agent_key 调写操作
+
+    安全设计：
+    - 不返回 access_token 或 agent_key（只返回 supplier_id + 公司名）
+    - 模糊匹配，可能返回多条，让 Agent 让老板确认
+    - 需 API Key
+    """
+    if x_api_key not in _API_KEYS:
+        raise HTTPException(status_code=401, detail="API Key 无效")
+
+    with get_db() as conn:
+        # 模糊匹配公司名（中文/英文）或手机号
+        rows = conn.execute(
+            "SELECT id, name_zh, name_en, category FROM suppliers WHERE name_zh LIKE ? OR name_en LIKE ? OR phone LIKE ? LIMIT 10",
+            (f"%{q}%", f"%{q}%", f"%{q}%"),
+        ).fetchall()
+
+    if not rows:
+        return {
+            "found": False,
+            "message": f"未找到匹配 '{q}' 的工厂。如果是新工厂，请调用 /register_supplier 注册。",
+        }
+
+    return {
+        "found": True,
+        "count": len(rows),
+        "suppliers": [
+            {
+                "supplier_id": r["id"],
+                "company_name": r["name_zh"] or r["name_en"],
+                "category": r["category"],
+            }
+            for r in rows
+        ],
+        "next_step": "请让老板确认是哪一家工厂，然后用 supplier_id + agent_id + agent_key 调写操作。",
     }
 
 
 @app.post("/recover_identity")
 def recover_identity(req: RecoverIdentityRequest):
-    """v5.2.5: 用手机号+邮箱找回 supplier_id 和 access_token
+    """v5.2.7: 用手机号+邮箱找回 supplier_id 和 access_token + agent_id + agent_key
 
-    解决卡点 3：identity.json 完全丢失时，工厂老板可用注册时的手机号+邮箱恢复身份。
-    恢复后旧 access_token 失效，返回新的 access_token（防止旧 token 泄露）。
+    解决卡点 3：长期记忆完全丢失时，工厂老板可用注册时的手机号+邮箱恢复身份。
+    恢复后旧凭证全部失效，返回新凭证（防止旧凭证泄露）。
 
     安全设计：
     - 需同时提供手机号 AND 邮箱（两者必须与注册时一致）
-    - 恢复后旧 access_token 立即失效
-    - 返回新 access_token
+    - 恢复后旧 access_token + agent_id + agent_key 立即失效
+    - 返回新凭证
     - 限流：3次/小时/IP（防暴力枚举）
     """
     with get_db() as conn:
         s = conn.execute(
-            "SELECT id, name_zh, name_en, access_token FROM suppliers WHERE phone = ? AND email = ?",
+            "SELECT id, name_zh, name_en, access_token, agent_id, agent_key FROM suppliers WHERE phone = ? AND email = ?",
             (req.phone, req.email),
         ).fetchone()
 
         if not s:
             raise HTTPException(status_code=404, detail="未找到匹配的工厂。请确认手机号和邮箱与注册时一致。")
 
-        # 生成新 access_token，旧 token 失效
+        # 生成新凭证，旧凭证全部失效
         new_token = _gen_token(32)
+        new_agent_id = f"agent-{s['id'][:12]}-{_gen_token(4)}"
+        new_agent_key = _gen_token(32)
         conn.execute(
-            "UPDATE suppliers SET access_token = ? WHERE id = ?",
-            (new_token, s["id"]),
+            "UPDATE suppliers SET access_token = ?, agent_id = ?, agent_key = ? WHERE id = ?",
+            (new_token, new_agent_id, new_agent_key, s["id"]),
         )
         conn.commit()
 
@@ -4894,9 +4987,11 @@ def recover_identity(req: RecoverIdentityRequest):
         "supplier_id": s["id"],
         "company_name": s["name_zh"] or s["name_en"],
         "access_token": new_token,
+        "agent_id": new_agent_id,
+        "agent_key": new_agent_key,
         "old_token_revoked": True,
-        "message": "身份恢复成功。旧 access_token 已失效。请立即将新 access_token 持久化到 ~/.linkmoney/identity.json",
-        "next_step": f"后续调用 7 个工厂端点时请使用新的 access_token: {new_token[:8]}...",
+        "message": "身份恢复成功。旧凭证全部失效。请立即将新凭证持久化到长期记忆或 ~/.linkmoney/identity.json",
+        "next_step": f"后续调用 7 个工厂端点时请使用新的 access_token 或 agent_id+agent_key",
     }
 
 
@@ -4945,6 +5040,8 @@ class LinkMcpRequest(BaseModel):
     """工厂部署完自有 MCP Server 后，回写 endpoint 到中央库"""
     mcp_endpoint: str                           # 如 https://factory.com/mcp
     access_token: str = ""                      # v5.2.4: 工厂身份凭证
+    agent_id: str = ""                          # v5.2.7: Agent 凭证 ID（存长期记忆）
+    agent_key: str = ""                         # v5.2.7: Agent 凭证密钥（存长期记忆）
     verification_token: str = ""                # 向后兼容（已弃用）
     skill_platforms: list = []                  # 已发布到哪些平台 ["github","claude","coze"]
     skill_installs: int = 0                     # 安装数
@@ -4966,7 +5063,7 @@ def link_supplier_mcp(supplier_id: str, req: LinkMcpRequest):
 
     with get_db() as conn:
         # v5.2.4: 统一身份校验
-        _verify_supplier_access(conn, supplier_id, req.access_token)
+        _verify_supplier_access(conn, supplier_id, req.access_token, req.agent_id, req.agent_key)
 
         # 3. 可选：探测 MCP endpoint 可达性（best-effort，失败不阻塞）
         mcp_reachable = False
@@ -5021,7 +5118,7 @@ def unlink_supplier_mcp(supplier_id: str, req: LinkMcpRequest):
     """取消 MCP 端点登记（回退到缓存模式）"""
     with get_db() as conn:
         # v5.2.4: 统一身份校验
-        _verify_supplier_access(conn, supplier_id, req.access_token)
+        _verify_supplier_access(conn, supplier_id, req.access_token, req.agent_id, req.agent_key)
 
         conn.execute("""
             UPDATE suppliers SET
@@ -5244,6 +5341,8 @@ class ProductItem(BaseModel):
 class UpdateProductsRequest(BaseModel):
     """批量增删改产品"""
     access_token: str = ""   # v5.2.4: 工厂身份凭证（替代 verification_token）
+    agent_id: str = ""   # v5.2.7: Agent 凭证 ID（存长期记忆）
+    agent_key: str = ""  # v5.2.7: Agent 凭证密钥（存长期记忆）
     verification_token: str = ""  # 向后兼容（已弃用，access_token 优先）
     upsert: list = []   # 新增或更新（按 supplier_id + sku 去重）
     delete_skus: list = []  # 要删除的 SKU 列表
@@ -5260,7 +5359,7 @@ def update_supplier_products(supplier_id: str, req: UpdateProductsRequest):
     """
     with get_db() as conn:
         # v5.2.4: 统一身份校验 — supplier_id + access_token 绑定
-        _verify_supplier_access(conn, supplier_id, req.access_token)
+        _verify_supplier_access(conn, supplier_id, req.access_token, req.agent_id, req.agent_key)
 
         now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         upserted = 0
@@ -5692,6 +5791,8 @@ class BidOnRequirementRequest(BaseModel):
     requirement_id: str
     supplier_id: str
     access_token: str = ""  # v5.2.4: 工厂身份凭证
+    agent_id: str = ""  # v5.2.7: Agent 凭证 ID（存长期记忆）
+    agent_key: str = ""  # v5.2.7: Agent 凭证密钥（存长期记忆）
     unit_price_usd: float
     lead_time_days: int = 0
     moq: int = 0
@@ -5708,7 +5809,7 @@ def bid_on_requirement(req: BidOnRequirementRequest, request: Request):
     """
     # v5.2.4: 统一身份校验
     with get_db() as conn:
-        s_row = _verify_supplier_access(conn, req.supplier_id, req.access_token)
+        s_row = _verify_supplier_access(conn, req.supplier_id, req.access_token, req.agent_id, req.agent_key)
     if not s_row["email_verified"]:
         raise HTTPException(status_code=403, detail="请先验证邮箱后再报价")
 
