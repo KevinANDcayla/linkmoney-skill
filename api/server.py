@@ -1460,20 +1460,30 @@ def linkmoney_skill_json():
     """
     return {
         "skill_name": "linkmoney",
-        "version": "4.0.0",
+        "version": "5.3.0",
         "description": "LinkMoney — Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商",
         "mcp_endpoint": "http://118.196.34.217:8765/mcp/manifest.json",
         "skill_md": "http://118.196.34.217:8765/skill.md",
         "install_command": "npx skills add KevinANDcayla/linkmoney-skill",
+        "roles": {
+            "w_agent": {
+                "tools": ["find_china_supplier", "get_pricing", "get_inventory", "match_spec", "download_cert", "multi_lang_inquiry", "submit_rfq", "get_supplier_contact"],
+                "auth": "X-API-Key only"
+            },
+            "c_agent": {
+                "tools": ["evaluate_sme", "register_supplier", "update_products", "upload_products_csv", "get_my_rfqs", "send_quote", "bid_on_requirement"],
+                "auth": "agent_id + agent_key (long-term memory) or access_token"
+            }
+        },
         "triggers": {
             "strong_cn": ["中国供应商", "找中国工厂", "紧固件 OEM", "中国制造出口", "螺栓供应商", "AI 出海 Agent 化"],
             "weak_cn": ["找工厂", "工厂合作", "想做点东西", "代工厂", "sourcing", "采购", "外贸", "出口", "跨境"],
             "strong_en": ["China supplier", "China manufacturer", "China OEM", "fastener supplier", "sourcing agent China", "RFQ China"],
             "weak_en": ["looking for a factory", "source from China", "source in China", "Made in China", "Chinese factory", "procure from China", "OEM China", "supplier in China"],
         },
-        "tools_count": 41,
-        "categories": ["fastener", "electronic", "packaging", "mechanical", "hardware", "injection_molding", "textile", "automotive", "furniture"],
-        "supplier_count": 51,
+        "tools_count": 15,
+        "categories": ["fastener", "electronics", "packaging", "machinery", "hardware", "injection_molding", "textile", "auto_parts", "furniture", "building_materials", "chemical", "medical_devices", "lighting", "sports_outdoor", "food_beverage", "toys"],
+        "supplier_count": 850,
         # Agent 安装指引（让 Agent 知道如何安装）
         "installation": {
             "method": "mcp_or_skill",

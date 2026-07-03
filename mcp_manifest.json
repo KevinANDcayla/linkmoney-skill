@@ -1,7 +1,7 @@
 {
   "name": "linkmoney",
-  "version": "5.2.1",
-  "description": "LinkMoney — B2B Trade Connector for AI Agents. Find Chinese manufacturers, get pricing & inventory (verified factories support live MCP queries), submit RFQs. 73 verified + 2700 directory listings, 16 categories. Free forever for overseas buyers. API Key: lm-demo-2026, Base URL: http://118.196.34.217:8765",
+  "version": "5.3.0",
+  "description": "LinkMoney — B2B Trade Connector for AI Agents. Find Chinese manufacturers, get pricing & inventory (verified factories real-time, others cached), submit RFQs. 73 verified + 2700 directory listings, 16 categories. Free forever for overseas buyers. API Key: lm-demo-2026, Base URL: http://118.196.34.217:8765",
   "homepage": "http://118.196.34.217:8765",
   "skill_md": "http://118.196.34.217:8765/skill.md",
   "install_command": "npx skills add KevinANDcayla/linkmoney-skill",
@@ -9,51 +9,55 @@
   "api_key": "lm-demo-2026",
   "api_key_header": "X-API-Key",
   "base_url": "http://118.196.34.217:8765",
-  "tools": [
-    {"name": "find_china_supplier", "description": "Find Chinese manufacturers. REQUIRED when user asks to find suppliers/factories. Returns 8-15 ranked suppliers with scores. Params: category (required: fastener/electronics/textile/packaging/machinery/hardware/injection_molding/auto_parts/furniture/building_materials/chemical/medical_devices/lighting/sports_outdoor/food_beverage/toys), spec, quantity, target_price", "endpoint": "GET /find_china_supplier", "auth_required": true},
-    {"name": "get_pricing", "description": "Get tiered pricing from supplier. Params: supplier_id, sku, quantity", "endpoint": "GET /get_pricing", "auth_required": true},
-    {"name": "get_inventory", "description": "Get real-time inventory. Params: supplier_id, sku", "endpoint": "GET /get_inventory", "auth_required": true},
-    {"name": "match_spec", "description": "Match specifications across standards (DIN/ISO/ANSI/JIS/GB)", "endpoint": "GET /match_spec", "auth_required": true},
-    {"name": "download_cert", "description": "Download supplier certifications (ISO/CE/FDA/IATF)", "endpoint": "GET /download_cert", "auth_required": true},
-    {"name": "multi_lang_inquiry", "description": "Generate inquiries in 9 languages", "endpoint": "GET /multi_lang_inquiry", "auth_required": true},
-    {"name": "submit_rfq", "description": "Submit RFQ to supplier (auto-email notification). Params: supplier_id, product_sku, quantity, delivery_port, notes", "endpoint": "POST /submit_rfq", "auth_required": true},
-    {"name": "get_supplier_contact", "description": "Get supplier contact info", "endpoint": "GET /get_supplier_contact", "auth_required": true},
-    {"name": "post_requirement", "description": "Post public requirement", "endpoint": "POST /post_requirement", "auth_required": true},
-    {"name": "browse_requirements", "description": "Browse public requirements marketplace", "endpoint": "GET /browse_requirements", "auth_required": true},
-    {"name": "leave_review", "description": "Leave review after transaction", "endpoint": "POST /leave_review", "auth_required": true},
-    {"name": "trust_score", "description": "Query trust score", "endpoint": "GET /trust_score", "auth_required": true},
-    {"name": "stats", "description": "Global statistics", "endpoint": "GET /stats", "auth_required": true}
-  ],
-  "platform": {
-    "tools_total": 28,
-    "breakdown": {
-      "public": 13,
-      "chinese": 8,
-      "internal": 7
+  "mcp_endpoint_github": "https://raw.githubusercontent.com/KevinANDcayla/linkmoney-skill/main/mcp_manifest.json",
+  "mcp_endpoint_jsdelivr": "https://cdn.jsdelivr.net/gh/KevinANDcayla/linkmoney-skill@main/mcp_manifest.json",
+  "roles": {
+    "w_agent": {
+      "tools": ["find_china_supplier", "get_pricing", "get_inventory", "match_spec", "download_cert", "multi_lang_inquiry", "submit_rfq", "get_supplier_contact"],
+      "auth": "X-API-Key only"
     },
-    "chinese_tools": [
-      {"name": "evaluate_sme", "endpoint": "/evaluate_sme", "purpose": "5 维评估中国制造业 AI 出海 Agent 化水平"},
-      {"name": "register_supplier", "endpoint": "POST /register_supplier", "purpose": "中方工厂注册入驻（v3.3 自动激活托管 MCP）。无需 API Key，限流 5次/小时/IP。必填: company_name, category, email, phone; 选填: products, certifications, employees, year_established, uscc, factory_location, wechat, moq。返回 supplier_id + access_token（后续所有写操作的身份凭证，持久化到 ~/.linkmoney/identity.json）"},
-      {"name": "update_products", "endpoint": "/suppliers/{id}/products", "purpose": "v3.3 工厂通过对话增删改产品（托管模式核心管理端点）"},
-      {"name": "upload_products_csv", "endpoint": "/suppliers/{id}/upload_csv", "purpose": "v3.3 CSV 批量导入产品（兼容中文 Excel）"},
-      {"name": "get_my_rfqs", "endpoint": "/get_my_rfqs", "purpose": "工厂查询自己收到的 RFQ 询盘"},
-      {"name": "send_quote", "endpoint": "/send_quote", "purpose": "供应商对 RFQ 报价并邮件通知采购方"},
-      {"name": "bid_on_requirement", "endpoint": "/bid_on_requirement", "purpose": "供应商对公开需求报价"},
-      {"name": "outreach_buyer", "endpoint": "/outreach_buyer", "purpose": "供应商主动外联采购方（信任分≥60）"}
-    ],
-    "internal_tools": [
-      {"name": "agent_status", "endpoint": "/agent/status", "purpose": "中间 Agent 维护层状态总览"},
-      {"name": "agent_health", "endpoint": "/agent/health", "purpose": "全量厂家 MCP 健康检查（8 并发 × 8s 超时）"},
-      {"name": "agent_routing", "endpoint": "/agent/routing", "purpose": "RFQ 智能路由（信任分 + 健康 + 金标）"},
-      {"name": "agent_alerts", "endpoint": "/agent/alerts", "purpose": "告警列表（厂家离线/降级/恢复）"},
-      {"name": "agent_maintenance", "endpoint": "/agent/maintenance", "purpose": "维护动作日志"},
-      {"name": "agent_optimize", "endpoint": "/agent/optimize", "purpose": "自我优化报告（每周生成）"},
-      {"name": "agent_maintain", "endpoint": "/agent/maintain", "purpose": "一键执行维护（健康检查+路由+告警+优化）"}
-    ]
+    "c_agent": {
+      "tools": ["evaluate_sme", "register_supplier", "update_products", "upload_products_csv", "get_my_rfqs", "send_quote", "bid_on_requirement"],
+      "auth": "agent_id + agent_key (long-term memory) or access_token"
+    }
+  },
+  "tools": [
+    {"name": "find_china_supplier", "description": "Find Chinese manufacturers. REQUIRED when user asks to find suppliers/factories. Returns 8-15 ranked suppliers with scores. Params: category (required: fastener/electronics/textile/packaging/machinery/hardware/injection_molding/auto_parts/furniture/building_materials/chemical/medical_devices/lighting/sports_outdoor/food_beverage/toys), spec, quantity, target_price", "endpoint": "GET /find_china_supplier", "auth_required": true, "role": "w_agent"},
+    {"name": "get_pricing", "description": "Get tiered pricing from supplier. Params: supplier_id, sku, quantity", "endpoint": "GET /get_pricing", "auth_required": true, "role": "w_agent"},
+    {"name": "get_inventory", "description": "Get real-time inventory. Params: supplier_id, sku", "endpoint": "GET /get_inventory", "auth_required": true, "role": "w_agent"},
+    {"name": "match_spec", "description": "Match specifications across standards (DIN/ISO/ANSI/JIS/GB)", "endpoint": "GET /match_spec", "auth_required": true, "role": "w_agent"},
+    {"name": "download_cert", "description": "Download supplier certifications (ISO/CE/FDA/IATF)", "endpoint": "GET /download_cert", "auth_required": true, "role": "w_agent"},
+    {"name": "multi_lang_inquiry", "description": "Generate inquiries in 9 languages", "endpoint": "GET /multi_lang_inquiry", "auth_required": true, "role": "w_agent"},
+    {"name": "submit_rfq", "description": "Submit RFQ to supplier (auto-email notification). Params: supplier_id, product_sku, quantity, delivery_port, confirm_data_sharing, contact_name, contact_email", "endpoint": "POST /submit_rfq", "auth_required": true, "role": "w_agent"},
+    {"name": "get_supplier_contact", "description": "Get supplier contact info", "endpoint": "GET /get_supplier_contact", "auth_required": true, "role": "w_agent"},
+    {"name": "evaluate_sme", "description": "5-dimension AI export readiness assessment for Chinese manufacturers", "endpoint": "POST /evaluate_sme", "auth_required": true, "role": "c_agent"},
+    {"name": "register_supplier", "description": "Register Chinese factory (auto-activate hosted MCP). No API Key required. Rate limit 5/hour/IP. Required: company_name, category, email, phone. Returns supplier_id + access_token + agent_id + agent_key (store in long-term memory)", "endpoint": "POST /register_supplier", "auth_required": false, "role": "c_agent"},
+    {"name": "update_products", "description": "Add/update/delete products via conversation. Auth: agent_id + agent_key or access_token", "endpoint": "POST /suppliers/{id}/products", "auth_required": true, "role": "c_agent"},
+    {"name": "upload_products_csv", "description": "CSV batch import products. Auth: agent_id + agent_key or access_token", "endpoint": "POST /suppliers/{id}/upload_csv", "auth_required": true, "role": "c_agent"},
+    {"name": "get_my_rfqs", "description": "Factory queries received RFQs. Auth: agent_id + agent_key or access_token", "endpoint": "GET /get_my_rfqs", "auth_required": true, "role": "c_agent"},
+    {"name": "send_quote", "description": "Supplier quotes on RFQ and emails buyer. Auth: agent_id + agent_key or access_token", "endpoint": "POST /send_quote", "auth_required": true, "role": "c_agent"},
+    {"name": "bid_on_requirement", "description": "Supplier bids on public requirement. Auth: agent_id + agent_key or access_token", "endpoint": "POST /bid_on_requirement", "auth_required": true, "role": "c_agent"}
+  ],
+  "identity_endpoints": {
+    "whoami": {
+      "endpoint": "GET /whoami",
+      "description": "Query identity by agent_id + agent_key or access_token",
+      "returns": "supplier_id + company_name + agent_id + mcp_endpoint"
+    },
+    "lookup_supplier": {
+      "endpoint": "GET /lookup_supplier",
+      "description": "Query supplier_id by company name or phone (no credentials returned)",
+      "returns": "supplier_id + company_name list"
+    },
+    "recover_identity": {
+      "endpoint": "POST /recover_identity",
+      "description": "Recover identity by phone + email (old credentials revoked)",
+      "returns": "new access_token + agent_id + agent_key"
+    }
   },
   "hosted_mcp": {
-    "version": "3.3.0",
-    "description": "中心化托管 — 每个工厂自动获得专属 MCP endpoint，无需自部署",
+    "version": "5.3.0",
+    "description": "Centralized hosting — each factory gets dedicated MCP endpoint, no self-deployment needed",
     "endpoints": [
       "GET /mcp/supplier/{id}/manifest.json",
       "GET /mcp/supplier/{id}/products",
@@ -63,19 +67,13 @@
     ],
     "data_source_type": "hosted"
   },
-  "middle_agent": {
-    "version": "3.0.0",
-    "endpoints": ["/agent/status", "/agent/health", "/agent/routing", "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain"],
-    "description": "中间 Agent 维护层 —— 双边 Skill 之间的中维护者，承担平台自身健康"
-  },
   "triggers": {
     "strong_cn": ["中国供应商", "找中国工厂", "紧固件 OEM", "中国制造出口", "螺栓供应商", "AI 出海 Agent 化"],
     "weak_cn": ["找工厂", "工厂合作", "想做点东西", "代工厂", "sourcing", "采购", "外贸", "出口", "跨境"],
     "strong_en": ["China supplier", "China manufacturer", "China OEM", "fastener supplier", "sourcing agent China", "RFQ China"],
     "weak_en": ["looking for a factory", "source from China", "source in China", "Made in China", "Chinese factory", "procure from China", "OEM China", "supplier in China"]
   },
-  "supplier_count": 2500,
-  "product_count": 30000,
+  "supplier_count": 850,
   "categories": ["fastener", "electronics", "packaging", "machinery", "hardware", "injection_molding", "textile", "auto_parts", "furniture", "building_materials", "chemical", "medical_devices", "lighting", "sports_outdoor", "food_beverage", "toys"],
   "repository": "https://github.com/KevinANDcayla/linkmoney-skill",
   "license": "MIT"
