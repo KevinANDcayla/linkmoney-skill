@@ -92,7 +92,7 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
 <section class="hero">
   <div class="brand-symbol">∞</div>
   <h1>LinkMoney <span class="gold">连钱</span></h1>
-  <p class="subtitle">Agent 时代的中立第三方 B2B 贸易链接器 — 让海外买家的 Agent 主动找上中国工厂</p>
+  <p class="subtitle">Agent 时代的中立第三方 B2B 贸易链接器 · 16 品类 2874 家工厂 · 让海外买家的 Agent 主动找上中国工厂</p>
   <div class="cta">
     <a href="#install" class="btn btn-gold">让 Agent 安装 LinkMoney</a>
     <a href="#evaluate" class="btn btn-outline">评估我的企业 AI 出海水平</a>
@@ -107,28 +107,28 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
       <h3>🇨🇳 中国制造业老板</h3>
       <ul>
         <li>5 维 AI 出海 Agent 化评估（免费评估）</li>
-        <li>创建你工厂的"海外采购方 Agent Skill"</li>
-        <li>分发到 Claude / ChatGPT / 千问 / 钉钉等 10+ 平台</li>
-        <li>海外采购方 Agent 主动找到你，自动询盘</li>
-        <li>实时监控安装数 & 询盘转化</li>
+        <li>注册即自动激活托管 MCP，零部署零门槛</li>
+        <li>对话式管理产品（增删改 + CSV 批量导入）</li>
+        <li>agent_id + agent_key 长期记忆身份持久化</li>
+        <li>实时收到海外 RFQ 询盘并一键报价</li>
       </ul>
     </div>
     <div class="column">
       <h3>🌍 海外采购方</h3>
       <ul>
-        <li>5 秒找到中国可靠供应商（7 大品类覆盖）</li>
+        <li>5 秒找到中国可靠供应商（16 大品类覆盖）</li>
         <li>实时查价格、库存、认证、规格匹配</li>
         <li>1 次 Agent 调用完成传统 30 分钟询盘</li>
-        <li>多语言自动询盘（中/英/日/德/法/西/阿）</li>
+        <li>多语言自动询盘（中/英/日/德/法/西/阿/俄/韩）</li>
         <li>ISO / IATF / CE / RoHS / FDA 认证验证</li>
       </ul>
     </div>
   </div>
 </section>
 
-<!-- 12 大 Tools -->
+<!-- 15 大 Tools -->
 <section class="section" style="background: var(--gray);">
-  <h2>12 个核心 <span>Tools</span></h2>
+  <h2>15 个核心 <span>Tools</span></h2>
   <div class="features">
     <div class="feature-card">
       <div class="icon">📊</div>
@@ -138,7 +138,7 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
     <div class="feature-card">
       <div class="icon">🔧</div>
       <h3>register_supplier</h3>
-      <p>工厂注册即自动激活托管 MCP，零门槛接入</p>
+      <p>工厂注册即自动激活托管 MCP，返回 agent_id + agent_key 长期记忆凭证</p>
     </div>
     <div class="feature-card">
       <div class="icon">🚀</div>
@@ -146,9 +146,24 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
       <p>通过对话增删改产品，海外 Agent 立即可查询</p>
     </div>
     <div class="feature-card">
+      <div class="icon">🗂️</div>
+      <h3>upload_products_csv</h3>
+      <p>CSV 批量导入产品，兼容中文 Excel</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">📥</div>
+      <h3>get_my_rfqs</h3>
+      <p>工厂查询自己收到的 RFQ 询盘列表</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">💬</div>
+      <h3>send_quote</h3>
+      <p>供应商对 RFQ 报价并自动邮件通知采购方</p>
+    </div>
+    <div class="feature-card">
       <div class="icon">🔍</div>
       <h3>find_china_supplier</h3>
-      <p>海外采购方 5 秒匹配 8-15 家中国供应商，7 维评分</p>
+      <p>海外采购方 5 秒匹配 8-15 家中国供应商，16 品类覆盖</p>
     </div>
     <div class="feature-card">
       <div class="icon">💰</div>
@@ -158,7 +173,7 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
     <div class="feature-card">
       <div class="icon">📦</div>
       <h3>get_inventory</h3>
-      <p>库存状态 + Lead Time（verified 工厂返回实时，其余返回缓存），避免断货风险</p>
+      <p>库存状态 + Lead Time（verified 工厂返回实时，其余返回缓存）</p>
     </div>
     <div class="feature-card">
       <div class="icon">📏</div>
@@ -182,13 +197,13 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
     </div>
     <div class="feature-card">
       <div class="icon">🎯</div>
-      <h3>register_buyer</h3>
-      <p>海外采购方自注册，无需管理员预存即可发 RFQ</p>
+      <h3>bid_on_requirement</h3>
+      <p>供应商对公开需求报价，主动获客</p>
     </div>
     <div class="feature-card">
-      <div class="icon">🗂️</div>
-      <h3>upload_products_csv</h3>
-      <p>CSV 批量导入产品，兼容中文 Excel</p>
+      <div class="icon">🛡️</div>
+      <h3>身份恢复三件套</h3>
+      <p>whoami / lookup_supplier / recover_identity - Agent 长期记忆丢失时安全恢复</p>
     </div>
   </div>
 </section>
@@ -205,12 +220,12 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
     <div class="step">
       <div class="num">2</div>
       <h4>注册入驻</h4>
-      <p>自动激活托管 MCP<br>零门槛，无需服务器</p>
+      <p>自动激活托管 MCP<br>agent_id 存长期记忆</p>
     </div>
     <div class="step">
       <div class="num">3</div>
       <h4>收 RFQ 成交</h4>
-      <p>海外 Agent 自动找上门<br>Agent 时代的外贸</p>
+      <p>海外 Agent 自动找上门<br>一键报价 + 邮件通知</p>
     </div>
   </div>
 </section>
@@ -280,10 +295,42 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
     </div>
     <div class="install-block">
       <p style="color:rgba(255,255,255,0.7); margin-bottom:8px;"># MCP 直接接入</p>
-      <code>mcp_endpoint: https://linkmoney.online/mcp</code>
+      <code>mcp_endpoint: http://118.196.34.217:8765/mcp/manifest.json</code>
     </div>
     <p style="text-align:center; margin-top:24px; color:#666;">
       也可以在 Coze 商店、阿里云 AgentRun、千问 App、钉钉 AI 等平台搜索 "LinkMoney" 一键安装
+    </p>
+  </div>
+</section>
+
+<!-- v5.3 Agent 身份持久化 + 数据真实性 -->
+<section class="section" id="security">
+  <h2>Agent 身份 <span>持久化</span></h2>
+  <div class="dual-columns">
+    <div class="column">
+      <h3>🔑 agent_id + agent_key 长期记忆</h3>
+      <ul>
+        <li>注册返回 4 个凭证：supplier_id / access_token / agent_id / agent_key</li>
+        <li>agent_id + agent_key 存入 Agent 长期记忆（CLAUDE.md / .cursorrules 等）</li>
+        <li>解决多老板共用 Agent 时身份误用问题</li>
+        <li>7 个写操作支持双模式认证（access_token 或 agent_id+agent_key）</li>
+      </ul>
+    </div>
+    <div class="column">
+      <h3>🛡️ 三层身份保障</h3>
+      <ul>
+        <li>第 1 层：agent_id + agent_key 存长期记忆（90% 场景）</li>
+        <li>第 2 层：新对话问"您是哪个工厂的"-> /lookup_supplier 确认</li>
+        <li>第 3 层：写操作前 _verify_supplier_access 双模式验证</li>
+        <li>/recover_identity 全凭证重置（旧 token 全部失效）</li>
+      </ul>
+    </div>
+  </div>
+  <div style="background: #fff7ed; border-left: 4px solid #FFB800; padding: 20px 24px; border-radius: 8px; margin-top: 32px;">
+    <h4 style="color: #92400e; margin-bottom: 8px;">⚠️ 数据真实性强约束（v5.2.8）</h4>
+    <p style="color: #78350f; font-size: 14px;">
+      Agent 不得编造价格、库存、MOQ、交期等关键字段。老板未提供时必须追问，禁止使用"行业默认值"。
+      空字段返回 warning 提醒，海外采购方需通过 RFQ 询价获取真实报价。
     </p>
   </div>
 </section>
@@ -292,7 +339,7 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
 <section class="section" style="background: linear-gradient(135deg, #0A0E27 0%, #1a1f4a 100%); color: #fff;" id="middle-agent">
   <div style="max-width: 1000px; margin: 0 auto;">
     <div style="text-align:center; margin-bottom: 48px;">
-      <span style="display:inline-block; padding: 6px 14px; background: rgba(255,184,0,0.15); color: #FFB800; border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 16px;">v3.0 新增</span>
+      <span style="display:inline-block; padding: 6px 14px; background: rgba(255,184,0,0.15); color: #FFB800; border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 16px;">平台运维层</span>
       <h2 style="color: #fff; margin-bottom: 12px;">中间 Agent 维护层</h2>
       <p style="color: rgba(255,255,255,0.7); max-width: 600px; margin: 0 auto;">双边 Skill 之间的「中维护者」 — 监控厂家 MCP 健康、决定 RFQ 路由、发现异常告警、基于历史指标自我优化。</p>
     </div>
@@ -344,8 +391,8 @@ fetch('/track', {method:'POST', headers:{'Content-Type':'application/json'}, bod
 <footer>
   <p>LinkMoney（连钱）— Agent 时代的中立第三方 B2B 贸易链接器</p>
   <p style="margin-top:8px;">
-    <a href="https://linkmoney.online">linkmoney.online</a> ·
-    <a href="https://github.com/linkmoney-ai">GitHub</a> ·
+    <a href="http://118.196.34.217:8765">linkmoney.online</a> ·
+    <a href="https://github.com/KevinANDcayla/linkmoney-skill">GitHub</a> ·
     agent@linkmoney.online
   </p>
   <p style="margin-top:16px; font-size:12px;">
