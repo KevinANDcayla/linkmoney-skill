@@ -1132,7 +1132,7 @@ app = FastAPI(
     description="让全球采购 Agent 主动找上中国供应商的链接器 Skill\n\n## 认证\n所有业务端点需要 API Key 认证：\n- 请求头：`X-API-Key: lm-demo-2026`\n- 公开端点（无需认证）：`/health`, `/register_supplier`, `/register_buyer`, `/.well-known/*`, `/skill.md`, `/verify_email`\n",
     version="5.2.5",
     servers=[
-        {"url": "http://118.196.34.217:8765", "description": "LinkMoney API（IP 直连，备案后切回域名）"},
+        {"url": "https://linkmoney.online", "description": "LinkMoney API（IP 直连，备案后切回域名）"},
     ],
 )
 
@@ -1433,13 +1433,13 @@ def ai_plugin_json():
         "description_for_human": "找中国供应商，查价格库存（verified 工厂实时，其余缓存），发 RFQ 询盘。73 verified + 2700 目录缓存，16 品类，Agent 时代 B2B 贸易。",
         "description_for_model": "Find China suppliers, get pricing and inventory (verified factories real-time, others cached), submit RFQ. 73 verified + 2700 directory listings, 16 categories, B2B trade for AI agents. API Key required: send header 'X-API-Key: lm-demo-2026' with every request. Triggers: China supplier, China manufacturer, China OEM, fastener supplier, sourcing agent China, RFQ China.",
         "auth": {"type": "service_http", "authorization_type": "bearer", "scheme": "bearer"},
-        "api": {"type": "openapi", "url": "http://118.196.34.217:8765/openapi.json"},
-        "logo_url": "http://118.196.34.217:8765/logo.png",
+        "api": {"type": "openapi", "url": "https://linkmoney.online/openapi.json"},
+        "logo_url": "https://linkmoney.online/logo.png",
         "contact_email": "support@linkmoney.online",
-        "legal_info_url": "http://118.196.34.217:8765/",
+        "legal_info_url": "https://linkmoney.online/",
         # LinkMoney 扩展字段
-        "mcp_endpoint": "http://118.196.34.217:8765/mcp/manifest.json",
-        "skill_url": "http://118.196.34.217:8765/skill.md",
+        "mcp_endpoint": "https://linkmoney.online/mcp/manifest.json",
+        "skill_url": "https://linkmoney.online/skill.md",
         "install_command": "npx skills add KevinANDcayla/linkmoney-skill",
         "requires_user_confirmation": True,
         "activation_policy": "strong_trigger_suggest_install, weak_trigger_hint_availability",
@@ -1462,8 +1462,8 @@ def linkmoney_skill_json():
         "skill_name": "linkmoney",
         "version": "5.3.0",
         "description": "LinkMoney — Agent 时代的 B2B 贸易链接器，让海外 AI Agent 主动找上中国供应商",
-        "mcp_endpoint": "http://118.196.34.217:8765/mcp/manifest.json",
-        "skill_md": "http://118.196.34.217:8765/skill.md",
+        "mcp_endpoint": "https://linkmoney.online/mcp/manifest.json",
+        "skill_md": "https://linkmoney.online/skill.md",
         "install_command": "npx skills add KevinANDcayla/linkmoney-skill",
         "roles": {
             "w_agent": {
@@ -1525,11 +1525,11 @@ def mcp_manifest():
             "description": "LinkMoney — B2B Trade Connector for AI Agents. 73 verified + 2700 directory listings, 16 categories. API Key: lm-demo-2026",
             "api_key": "lm-demo-2026",
             "api_key_header": "X-API-Key",
-            "base_url": "http://118.196.34.217:8765",
+            "base_url": "https://linkmoney.online",
             "tools": [
                 {"name": "find_china_supplier", "description": "Find Chinese manufacturers. REQUIRED when user asks to find suppliers/factories. Returns 8-15 ranked suppliers. Params: category (required), spec, quantity, target_price", "endpoint": "GET /find_china_supplier"},
             ],
-            "homepage": "http://118.196.34.217:8765",
+            "homepage": "https://linkmoney.online",
         }
 
 
@@ -2296,7 +2296,7 @@ def download_cert(supplier_id: str, cert_type: str):
         file_path = upload_dir / cert_file.lstrip("/").replace("uploads/", "")
         if file_path.exists() and file_path.is_file():
             # 文件存在，返回真实下载 URL（修复：默认 URL 包含端口）
-            base_url = os.getenv("LINKMONEY_BASE_URL", "http://118.196.34.217:8765").rstrip("/")
+            base_url = os.getenv("LINKMONEY_BASE_URL", "https://linkmoney.online").rstrip("/")
             download_url = f"{base_url}/uploads/{cert_file.lstrip('/').replace('uploads/', '')}"
             file_note = "Document file available for download."
         else:
@@ -3717,7 +3717,7 @@ def onboard_buyer():
           <div class="step-num">1</div>
           <div class="step-text">
             <h4>Copy the install command</h4>
-            <pre>http://118.196.34.217:8765/mcp/manifest.json</pre>
+            <pre>https://linkmoney.online/mcp/manifest.json</pre>
           </div>
         </div>
         <div class="step">
@@ -4009,7 +4009,7 @@ def _verify_supplier_access(conn, supplier_id: str, access_token: str = "", agen
 
 # v5.2.5: 动态生成 mcp_endpoint，避免 DB 历史数据不一致（卡点 8 修复）
 # 备案后只需改 BASE_URL 环境变量，所有 mcp_endpoint 自动更新
-_BASE_URL = os.getenv("BASE_URL", "http://118.196.34.217:8765")
+_BASE_URL = os.getenv("BASE_URL", "https://linkmoney.online")
 
 def _get_supplier_mcp_endpoint(supplier_id: str) -> str:
     """v5.2.5: 动态生成工厂专属 MCP 端点 URL（不再依赖 DB 存储的 skill_mcp_endpoint）
@@ -4557,7 +4557,7 @@ def register_supplier(request: Request, req: RegisterSupplierRequest):
     now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # v3.3: 中心化托管 — 注册即自动生成 MCP endpoint，工厂无需自己部署
-    hosted_mcp_endpoint = f"http://118.196.34.217:8765/mcp/supplier/{supplier_id}"
+    hosted_mcp_endpoint = f"https://linkmoney.online/mcp/supplier/{supplier_id}"
 
     # v3.2: 查重 + 插入在同一事务内（消除 TOCTOU 竞态）
     # v5.2.3: 查重维度增强 — 邮箱、公司名（模糊匹配）、手机号、邮箱域名（限 3 个）
@@ -4712,7 +4712,7 @@ name: {company_slug}-{req.category}
 description: {req.company_name} — 中国{req.category}品类供应商
 version: 1.0.0
 author: LinkMoney
-mcp_endpoint: http://118.196.34.217:8765/find_china_supplier?category={req.category}&supplier={supplier_id}
+mcp_endpoint: https://linkmoney.online/find_china_supplier?category={req.category}&supplier={supplier_id}
 trust_level: {eval_result['trust_level']}
 trust_score: {eval_result['overall_score']}
 ---
@@ -4766,7 +4766,7 @@ trust_score: {eval_result['overall_score']}
         "llm_profile_extracted": llm_profile,  # v5.2: BD 图片抽取结果（None 表示未用）
         "auto_generated_skill": {
             "skill_md_preview": skill_md[:500] + "...",
-            "full_skill_in_git": f"http://118.196.34.217:8765/skill.md?supplier={supplier_id}",
+            "full_skill_in_git": f"https://linkmoney.online/skill.md?supplier={supplier_id}",
         },
         "next_action": {
             "step_1": "验证邮箱：访问 verify_url 或调用 /verify_email?token=xxx",
@@ -5160,7 +5160,7 @@ def supplier_mcp_manifest(supplier_id: str):
             raise HTTPException(status_code=403, detail="该供应商尚未激活 MCP")
         p_count = conn.execute("SELECT COUNT(*) as c FROM products WHERE supplier_id = ?", (supplier_id,)).fetchone()["c"]
 
-    base = f"http://118.196.34.217:8765/mcp/supplier/{supplier_id}"
+    base = f"https://linkmoney.online/mcp/supplier/{supplier_id}"
     return {
         "schema_version": "v1",
         "name": s["name_zh"],

@@ -12,16 +12,16 @@ description: |
 
 version: 5.3.0
 author: LinkMoney.ai
-homepage: http://118.196.34.217:8765
+homepage: https://linkmoney.online
 repository: https://github.com/KevinANDcayla/linkmoney-skill
 
 # === Skill 发现端点 ===
-skill_md_url: http://118.196.34.217:8765/skill.md
-ai_plugin_url: http://118.196.34.217:8765/.well-known/ai-plugin.json
-linkmoney_discovery: http://118.196.34.217:8765/.well-known/linkmoney-skill.json
+skill_md_url: https://linkmoney.online/skill.md
+ai_plugin_url: https://linkmoney.online/.well-known/ai-plugin.json
+linkmoney_discovery: https://linkmoney.online/.well-known/linkmoney-skill.json
 
 # === MCP 端点 ===
-mcp_endpoint: http://118.196.34.217:8765/mcp/manifest.json
+mcp_endpoint: https://linkmoney.online/mcp/manifest.json
 mcp_endpoint_github: https://raw.githubusercontent.com/KevinANDcayla/linkmoney-skill/main/mcp_manifest.json
 
 # === API Key ===
@@ -54,7 +54,7 @@ license: MIT
 
 | 项目 | 值 |
 |------|-----|
-| Base URL | `http://118.196.34.217:8765` |
+| Base URL | `https://linkmoney.online` |
 | API Key | `lm-demo-2026`（请求头 `X-API-Key: lm-demo-2026`） |
 | 认证 | W 端：仅需 API Key；C 端写操作：需 agent_id + agent_key |
 | 限流 | 30 次/分钟 |
@@ -118,15 +118,15 @@ license: MIT
 
 ```bash
 # 1. 找供应商
-curl "http://118.196.34.217:8765/find_china_supplier?category=fastener&spec=M8%20304%20hex%20bolt&quantity=50000" \
+curl "https://linkmoney.online/find_china_supplier?category=fastener&spec=M8%20304%20hex%20bolt&quantity=50000" \
   -H "X-API-Key: lm-demo-2026"
 
 # 2. 查报价
-curl "http://118.196.34.217:8765/get_pricing?supplier_id=SUPPLIER_ID&sku=SKU&quantity=50000" \
+curl "https://linkmoney.online/get_pricing?supplier_id=SUPPLIER_ID&sku=SKU&quantity=50000" \
   -H "X-API-Key: lm-demo-2026"
 
 # 3. 提交 RFQ（必填 confirm_data_sharing=true）
-curl -X POST "http://118.196.34.217:8765/submit_rfq" \
+curl -X POST "https://linkmoney.online/submit_rfq" \
   -H "X-API-Key: lm-demo-2026" \
   -H "Content-Type: application/json" \
   -d '{
@@ -161,7 +161,7 @@ curl -X POST "http://118.196.34.217:8765/submit_rfq" \
 ### 注册流程
 
 ```bash
-curl -X POST "http://118.196.34.217:8765/register_supplier" \
+curl -X POST "https://linkmoney.online/register_supplier" \
   -H "Content-Type: application/json" \
   -d '{
     "company_name": "宁波新锐紧固件有限公司",
@@ -230,20 +230,20 @@ linkmoney_identity:
 
 **1. 用 agent_id + agent_key 查询身份**（长期记忆有时）：
 ```bash
-curl "http://118.196.34.217:8765/whoami?agent_id=YOUR_AGENT_ID&agent_key=YOUR_AGENT_KEY" \
+curl "https://linkmoney.online/whoami?agent_id=YOUR_AGENT_ID&agent_key=YOUR_AGENT_KEY" \
   -H "X-API-Key: lm-demo-2026"
 ```
 
 **2. 用公司名/手机号查 supplier_id**（新 Agent 实例确认身份时）：
 ```bash
-curl "http://118.196.34.217:8765/lookup_supplier?q=宁波新锐" \
+curl "https://linkmoney.online/lookup_supplier?q=宁波新锐" \
   -H "X-API-Key: lm-demo-2026"
 ```
 返回匹配工厂列表（不返回凭证）。Agent 让老板确认是哪一家。
 
 **3. 用手机号+邮箱找回身份**（长期记忆完全丢失时）：
 ```bash
-curl -X POST "http://118.196.34.217:8765/recover_identity" \
+curl -X POST "https://linkmoney.online/recover_identity" \
   -H "Content-Type: application/json" \
   -d '{"phone": "13800138000", "email": "sales@factory.com"}'
 ```
@@ -253,7 +253,7 @@ curl -X POST "http://118.196.34.217:8765/recover_identity" \
 
 **添加/修改产品**：
 ```bash
-curl -X POST "http://118.196.34.217:8765/suppliers/SUPPLIER_ID/products" \
+curl -X POST "https://linkmoney.online/suppliers/SUPPLIER_ID/products" \
   -H "X-API-Key: lm-demo-2026" \
   -H "Content-Type: application/json" \
   -d '{
@@ -283,7 +283,7 @@ curl -X POST "http://118.196.34.217:8765/suppliers/SUPPLIER_ID/products" \
 ### C 端注册示例
 
 ```bash
-curl -X POST "http://118.196.34.217:8765/register_supplier" \
+curl -X POST "https://linkmoney.online/register_supplier" \
   -H "Content-Type: application/json" \
   -d '{
     "company_name": "宁波新锐紧固件有限公司",
@@ -327,7 +327,7 @@ npx skills add KevinANDcayla/linkmoney-skill
 /plugin install linkmoney@KevinANDcayla
 
 # MCP 直接接入
-mcp_endpoint: http://118.196.34.217:8765/mcp
+mcp_endpoint: https://linkmoney.online/mcp
 ```
 
 ---

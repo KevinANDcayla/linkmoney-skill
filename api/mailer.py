@@ -151,7 +151,7 @@ class Mailer:
         subject = f"[LinkMoney RFQ] 您收到了来自 {buyer.get('company', '海外买家')} 的新询盘 - {product_name}{suffix}"
 
         # API base URL（给 Agent 操作指引用）
-        base_url = os.getenv("LINKMONEY_BASE_URL", "http://118.196.34.217:8765").rstrip("/")
+        base_url = os.getenv("LINKMONEY_BASE_URL", "https://linkmoney.online").rstrip("/")
         api_key = os.getenv("LINKMONEY_API_KEYS", "lm-prod-2026-key1").split(",")[0].strip()
         supplier_id = supplier.get("id", "")
         rfq_id = rfq["id"]
@@ -240,7 +240,7 @@ class Mailer:
         subject = f"[LinkMoney] Your RFQ #{rfq['id']} has been received - {len(matches)} Chinese factories matched{suffix}"
 
         # API base URL（给 Agent 查询指引用）
-        base_url = os.getenv("LINKMONEY_BASE_URL", "http://118.196.34.217:8765").rstrip("/")
+        base_url = os.getenv("LINKMONEY_BASE_URL", "https://linkmoney.online").rstrip("/")
         api_key = os.getenv("LINKMONEY_API_KEYS", "lm-prod-2026-key1").split(",")[0].strip()
         rfq_id = rfq["id"]
 
