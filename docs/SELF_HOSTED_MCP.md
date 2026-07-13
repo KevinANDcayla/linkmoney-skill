@@ -32,7 +32,7 @@ python server.py  # 启动在 https://0.0.0.0:9001
 部署并通过审核后，调用 LinkMoney API 注册端点：
 
 ```bash
-curl -X POST http://118.196.34.217:8765/suppliers/YOUR_SUPPLIER_ID/link_mcp \
+curl -X POST https://linkmoney.online/suppliers/YOUR_SUPPLIER_ID/link_mcp \
   -H "Content-Type: application/json" \
   -d '{
     "mcp_endpoint": "https://your-factory.com/mcp",
@@ -50,10 +50,10 @@ curl -X POST http://118.196.34.217:8765/suppliers/YOUR_SUPPLIER_ID/link_mcp \
 ## 托管 MCP endpoint 格式（默认方式，注册即获得）
 
 ```
-http://118.196.34.217:8765/mcp/supplier/{supplier_id}/products
-http://118.196.34.217:8765/mcp/supplier/{supplier_id}/pricing?sku=xxx&quantity=1000
-http://118.196.34.217:8765/mcp/supplier/{supplier_id}/inventory?sku=xxx
-http://118.196.34.217:8765/mcp/supplier/{supplier_id}/manifest.json
+https://linkmoney.online/mcp/supplier/{supplier_id}/products
+https://linkmoney.online/mcp/supplier/{supplier_id}/pricing?sku=xxx&quantity=1000
+https://linkmoney.online/mcp/supplier/{supplier_id}/inventory?sku=xxx
+https://linkmoney.online/mcp/supplier/{supplier_id}/manifest.json
 ```
 
 工厂不需要：服务器、域名、Docker、GitHub 仓库、curl 命令。
