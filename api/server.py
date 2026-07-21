@@ -418,7 +418,8 @@ def _get_db_json_version() -> tuple:
             row = conn.execute("SELECT value FROM config WHERE key = 'json_last_updated'").fetchone()
             last_updated = row["value"] if row else ""
         return (version, last_updated)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"db json version query failed: {e}")
         return ("", "")
 
 
@@ -965,8 +966,8 @@ def _log_api(endpoint: str, method: str, api_key_hash: str, ip: str, status_code
                 (endpoint, method, api_key_hash, ip, status_code, duration_ms),
             )
             conn.commit()
-    except Exception:
-        pass  # 日志写入失败不影响主流程
+    except Exception as e:
+        logger.warning(f"_log_api 写入失败 (endpoint={endpoint}): {e}")  # 不影响主流程，但需告警
 
 
 # ===== TTL 内存缓存（减少数据库查询，提升高并发性能） =====
@@ -1071,7 +1072,8 @@ def _is_safe_mcp_url(url: str) -> bool:
         if any(host.startswith(p) for p in _SSRF_BLOCKED_PREFIXES):
             return False
         return True
-    except Exception:
+    except Exception as e:
+        logger.debug(f"URL parse failed: {e}")
         return False
 
 
@@ -1130,7 +1132,7 @@ def _load_api_keys():
 app = FastAPI(
     title="LinkMoney MCP Server",
     description="让全球采购 Agent 主动找上中国供应商的链接器 Skill\n\n## 认证\n所有业务端点需要 API Key 认证：\n- 请求头：`X-API-Key: lm-demo-2026`\n- 公开端点（无需认证）：`/health`, `/register_supplier`, `/register_buyer`, `/.well-known/*`, `/skill.md`, `/verify_email`\n",
-    version="5.2.5",
+    version="5.3.0",
     servers=[
         {"url": "https://linkmoney.online", "description": "LinkMoney API（IP 直连，备案后切回域名）"},
     ],
@@ -1169,10 +1171,10 @@ app.openapi = _custom_openapi
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["https://linkmoney.online", "http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["X-API-Key", "Content-Type", "Authorization"],
 )
 
 # ===== SlowAPI 频率限制 =====
@@ -1199,9 +1201,7 @@ _AUTH_EXEMPT_PATHS = {
     "/register_supplier",  # v5.2.3: 中方工厂自注册（公开，降低 C 端闭环门槛，限流 5/hour/IP）
     "/recover_identity",  # v5.2.5: 身份恢复（公开，但需手机号+邮箱匹配，限流 3/hour/IP）
     "/whoami",  # v5.2.5: 身份查询（内部校验 access_token + API Key）
-    # v3.0 中间 Agent：作为平台维护者，对内默认开启（可在生产环境收紧）
-    "/agent/status", "/agent/health", "/agent/routing",
-    "/agent/alerts", "/agent/maintenance", "/agent/optimize", "/agent/maintain",
+    # v5.3.1 安全收紧: /agent/* 全部要求 API Key（原 v3.0 公开注释已移除）
     "/admin/dashboard",  # v5.1.0 监控看板页面（HTML 公开，数据接口仍需 API Key）
 }
 
@@ -1210,6 +1210,7 @@ _AUTH_EXEMPT_PATHS = {
 
 @app.middleware("http")
 async def auth_and_logging_middleware(request: Request, call_next):
+    import asyncio as _asyncio
     start_time = time.time()
     api_key_hash = ""
     status_code = 200
@@ -1224,7 +1225,8 @@ async def auth_and_logging_middleware(request: Request, call_next):
         or path.startswith("/openapi")
         or path == "/health"
         # v5.2.6: Agent Marketplace 已移除，不再需要 /marketplace/ 认证旁路
-        or path.startswith("/mcp/supplier/")  # v3.3 工厂托管 MCP 端点（公开，海外 Agent 直接调用）
+        # v5.3.1 安全收紧: /mcp/supplier/{id}/* 仅 manifest.json 公开（发现用），其余要求 API Key
+        or path.endswith("/manifest.json") and path.startswith("/mcp/supplier/")
     )
     if not is_exempt:
         api_key = request.headers.get("X-API-Key", "")
@@ -1232,7 +1234,7 @@ async def auth_and_logging_middleware(request: Request, call_next):
             status_code = 401
             logger.warning(f"缺少 API Key | {request.method} {path} | IP: {request.client.host if request.client else 'unknown'}")
             duration_ms = (time.time() - start_time) * 1000
-            _log_api(path, request.method, "", request.client.host if request.client else "", 401, duration_ms)
+            await _asyncio.to_thread(_log_api, path, request.method, "", request.client.host if request.client else "", 401, duration_ms)
             return JSONResponse(
                 status_code=401,
                 content={"error": "unauthorized", "message": "缺少 X-API-Key 请求头，请在请求中提供有效的 API Key"},
@@ -1241,7 +1243,7 @@ async def auth_and_logging_middleware(request: Request, call_next):
             status_code = 401
             logger.warning(f"无效 API Key | {request.method} {path} | IP: {request.client.host if request.client else 'unknown'}")
             duration_ms = (time.time() - start_time) * 1000
-            _log_api(path, request.method, hashlib.sha256(api_key.encode()).hexdigest()[:16] if api_key else "",
+            await _asyncio.to_thread(_log_api, path, request.method, hashlib.sha256(api_key.encode()).hexdigest()[:16] if api_key else "",
                      request.client.host if request.client else "", 401, duration_ms)
             return JSONResponse(
                 status_code=401,
@@ -1259,7 +1261,7 @@ async def auth_and_logging_middleware(request: Request, call_next):
     finally:
         duration_ms = (time.time() - start_time) * 1000
         logger.info(f"{request.method} {path} | {status_code} | {duration_ms:.1f}ms")
-        _log_api(path, request.method, api_key_hash,
+        await _asyncio.to_thread(_log_api, path, request.method, api_key_hash,
                  request.client.host if request.client else "", status_code, duration_ms)
 
     return response
@@ -1517,7 +1519,8 @@ def mcp_manifest():
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
             return _json.load(f)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"manifest generation fallback: {e}")
         # fallback to minimal manifest
         return {
             "name": "linkmoney",
@@ -2414,7 +2417,7 @@ async def multi_lang_inquiry(req: InquiryRequest):
             translated = None
             if llm_available:
                 try:
-                    translated = llm.translate(src_text, src_lang, lang)
+                    translated = await _asyncio.to_thread(llm.translate, src_text, src_lang, lang)
                 except DeepSeekError as e:
                     logger.warning(f"Ark translate failed ({src_lang}→{lang}): {e}")
 
@@ -2448,6 +2451,7 @@ class SubmitRFQRequest(BaseModel):
     port: str = "Ningbo"
     incoterms: str = "FOB"
     delivery_deadline: str = ""
+    contact_name: str = ""  # v5.3.1: 采购方联系人姓名（用于邮件通知）
     contact_email: str = ""
     raw_message: str = ""
     product_sku: str = ""  # 别名，兼容 Agent 传入
@@ -2470,8 +2474,9 @@ def submit_rfq(
     contact_email: str = "",
     raw_message: str = "",         # v3.0+ — 买家原始自然语言需求（可选，触发 LLM parse_rfq）
     body: SubmitRFQRequest = None,  # JSON body 支持
-    confirm_data_sharing: bool = False,  # v5.1.1 — 二次确认数据共享
+    confirm_data_sharing: bool = False,  # v5.1.1 — 二次确认数据共享（query 参数，必传 true）
     anonymize_contact: bool = False,     # v5.1.1 — 匿名化联系方式
+    contact_name: str = "",               # v5.3.1: 采购方联系人姓名（用于邮件通知）
 ):
     """
     提交 RFQ（v5.1.1 — 火山引擎豆包智能解析 + 二次确认 + 匿名化）
@@ -2505,6 +2510,7 @@ def submit_rfq(
         port = body.port or body.delivery_port or port
         incoterms = body.incoterms or incoterms
         delivery_deadline = body.delivery_deadline or delivery_deadline
+        contact_name = body.contact_name or contact_name
         contact_email = body.contact_email or contact_email
         raw_message = body.raw_message or body.notes or raw_message
 
@@ -2544,8 +2550,7 @@ def submit_rfq(
             try:
                 from middle_agent import report_ts_alert
                 report_ts_alert("critical", "buyer_inquiry", audit.reasons, audit.details)
-            except Exception:
-                pass
+            except Exception as e: logger.warning(f"T&S alert report failed: {e}")
             raise HTTPException(status_code=400, detail={
                 "error": "RFQ blocked by Trust & Safety audit",
                 "reasons": audit.reasons,
@@ -2556,8 +2561,7 @@ def submit_rfq(
             try:
                 from middle_agent import report_ts_alert
                 report_ts_alert("warn", "buyer_inquiry", audit.reasons, audit.details)
-            except Exception:
-                pass
+            except Exception as e: logger.warning(f"T&S alert report failed: {e}")
         # 审核结果存入 parsed_data，供后续追溯
         _ts_audit = audit.to_dict()
     except ImportError:
@@ -2655,8 +2659,8 @@ def submit_rfq(
             },
             product_name=sku,
         )
-    except Exception:
-        pass  # 邮件发送失败不影响RFQ提交
+    except Exception as e:
+        logger.warning(f"RFQ 邮件通知发送失败 (rfq_id可能未生成): {e}")  # 不影响RFQ提交，但买家/工厂会收不到通知
 
     # 异步发送邮件通知海外买家（含匹配到的工厂列表 + 5 工作日回复预期）
     try:
@@ -2835,7 +2839,8 @@ def admin_overview():
                 "SELECT COUNT(*) as cnt FROM mail_logs WHERE created_at >= ? AND status = 'failed'",
                 (today_str,)
             ).fetchone()["cnt"]
-        except Exception:
+        except Exception as e:
+            logger.warning(f"mail stats query failed: {e}")
             today_mail_count = today_mail_sent = today_mail_failed = 0
 
         # === 数据库版本 ===
@@ -2852,7 +2857,8 @@ def admin_overview():
             ["ps", "-o", "lstart=", "-p", "1"], capture_output=True, text=True, timeout=3
         )
         started_at = uptime_result.stdout.strip() if uptime_result.returncode == 0 else "unknown"
-    except Exception:
+    except Exception as e:
+        logger.warning(f"uptime query failed: {e}")
         started_at = "unknown"
 
     # Worker 数
@@ -2995,8 +3001,8 @@ def admin_recent_rfqs(limit: int = 10):
                     "status": r["status"],
                     "time": time_str,
                 })
-        except Exception:
-            pass  # bids 表可能不存在或字段不同
+        except Exception as e:
+            logger.warning(f"bid_on_requirement 日志查询失败: {e}")  # bids 表可能不存在或字段不同
 
     return {"rfqs": rfqs, "quotes": quotes, "total": total}
 
@@ -3013,7 +3019,8 @@ def admin_mail_logs(limit: int = 20):
                 ORDER BY created_at DESC
                 LIMIT ?
             """, (min(limit, 100),)).fetchall()
-        except Exception:
+        except Exception as e:
+            logger.warning(f"查询日志失败: {e}")
             return {"logs": [], "total": 0}
 
     logs = []
@@ -3249,7 +3256,10 @@ def get_my_rfqs(
     中国供应商查询自己收到的 RFQ 询盘列表。
     状态可选: pending(待处理) / quoted(已报价) / negotiating(洽谈中) / closed(已关闭)
     v5.2.4: 需携带 access_token 校验身份
+    v5.3.2: 优先从 X-Access-Token 请求头读取（与 whoami 一致）
     """
+    # v5.3.2: Header 优先（推荐 X-Access-Token），Query 向后兼容
+    access_token = request.headers.get("X-Access-Token", "") or access_token
     with get_db() as conn:
         # v5.2.4: 统一身份校验
         s_row = _verify_supplier_access(conn, supplier_id, access_token,
@@ -3410,8 +3420,7 @@ def send_quote(req: QuoteRequest, request: Request):
             try:
                 from middle_agent import report_ts_alert
                 report_ts_alert("critical", "supplier_quote", quote_audit.reasons, quote_audit.details)
-            except Exception:
-                pass
+            except Exception as e: logger.warning(f"T&S alert report failed: {e}")
             raise HTTPException(status_code=400, detail={
                 "error": "Quote blocked by Trust & Safety audit",
                 "reasons": quote_audit.reasons,
@@ -3422,8 +3431,7 @@ def send_quote(req: QuoteRequest, request: Request):
             try:
                 from middle_agent import report_ts_alert
                 report_ts_alert("warn", "supplier_quote", quote_audit.reasons, quote_audit.details)
-            except Exception:
-                pass
+            except Exception as e: logger.warning(f"T&S alert report failed: {e}")
         _quote_ts_audit = quote_audit.to_dict()
     except ImportError:
         _quote_ts_audit = None
@@ -3491,8 +3499,7 @@ def send_quote(req: QuoteRequest, request: Request):
             },
             drafted=drafted,  # v5.2: 传入 LLM 草稿（None 时用模板）
         )
-    except Exception:
-        pass
+    except Exception as e: logger.warning(f"send_quote 邮件通知失败: {e}")
 
     # 报价后失效 find_china_supplier 缓存（价格信息变了）
     _supplier_cache.invalidate("find:")
@@ -3993,12 +4000,15 @@ def _verify_supplier_access(conn, supplier_id: str, access_token: str = "", agen
     if not s:
         raise HTTPException(status_code=404, detail=f"供应商不存在: {supplier_id}")
 
-    # 方式 1：access_token（向后兼容）
-    if access_token and access_token == s["access_token"]:
+    # 方式 1：access_token（向后兼容）— v5.3.1 改用常量时间比较防时序攻击
+    import secrets as _secrets
+    if access_token and _secrets.compare_digest(access_token, s["access_token"] or ""):
         return dict(s)
 
-    # 方式 2：agent_id + agent_key（v5.2.7 新增，存长期记忆）
-    if agent_id and agent_key and agent_id == s["agent_id"] and agent_key == s["agent_key"]:
+    # 方式 2：agent_id + agent_key（v5.2.7 新增，存长期记忆）— 常量时间比较
+    if (agent_id and agent_key
+            and _secrets.compare_digest(agent_id, s["agent_id"] or "")
+            and _secrets.compare_digest(agent_key, s["agent_key"] or "")):
         return dict(s)
 
     raise HTTPException(
@@ -4291,8 +4301,7 @@ def _learn_match_weights(conn):
                 elapsed = (datetime.now() - last_ts).total_seconds()
                 if elapsed < _LEARN_COOLDOWN_SECONDS:
                     return  # 冷却中，跳过
-            except Exception:
-                pass  # 时间戳解析失败，继续学习
+            except Exception as e: logger.warning(f"timestamp parse failed: {e}")
 
         # 收集历史样本：已报价的 RFQ + 对应评价
         # 注意：rfqs 表无 category 列；suppliers 表无 location 列（拆为 city/province/port）
@@ -4322,8 +4331,7 @@ def _learn_match_weights(conn):
             if isinstance(certs, str):
                 try:
                     certs = json.loads(certs)
-                except Exception:
-                    certs = []
+                except Exception as e: logger.warning(f"certs query failed: {e}"); certs = []
             has_certs = isinstance(certs, list) and len(certs) > 0
             moq_ok = row["quantity"] and row["moq"] and row["quantity"] >= row["moq"]
             has_price = row["target_price_usd"] and row["target_price_usd"] > 0
@@ -4477,8 +4485,7 @@ def register_supplier(request: Request, req: RegisterSupplierRequest):
             try:
                 from middle_agent import report_ts_alert
                 report_ts_alert("critical", "supplier_registration", reg_audit.reasons, reg_audit.details)
-            except Exception:
-                pass
+            except Exception as e: logger.warning(f"T&S alert report failed: {e}")
             raise HTTPException(status_code=400, detail={
                 "error": "Registration blocked by Trust & Safety audit",
                 "reasons": reg_audit.reasons,
@@ -4489,8 +4496,7 @@ def register_supplier(request: Request, req: RegisterSupplierRequest):
             try:
                 from middle_agent import report_ts_alert
                 report_ts_alert("warn", "supplier_registration", reg_audit.reasons, reg_audit.details)
-            except Exception:
-                pass
+            except Exception as e: logger.warning(f"T&S alert report failed: {e}")
         _reg_ts_audit = reg_audit.to_dict()
     except ImportError:
         _reg_ts_audit = None  # trust_safety 模块缺失时放行（开发环境）
@@ -4863,9 +4869,10 @@ class RecoverIdentityRequest(BaseModel):
 
 @app.get("/whoami")
 def whoami(
-    access_token: str = Query("", description="注册时返回的 access_token（方式 1）"),
-    agent_id: str = Query("", description="注册时返回的 agent_id（方式 2，存长期记忆）"),
-    agent_key: str = Query("", description="注册时返回的 agent_key（方式 2，存长期记忆）"),
+    request: Request,
+    access_token: str = Query("", description="注册时返回的 access_token（方式 1，推荐用 X-Access-Token 请求头）"),
+    agent_id: str = Query("", description="注册时返回的 agent_id（方式 2，存长期记忆，推荐用 X-Agent-Id 请求头）"),
+    agent_key: str = Query("", description="注册时返回的 agent_key（方式 2，存长期记忆，推荐用 X-Agent-Key 请求头）"),
     x_api_key: str = Header("", alias="X-API-Key"),
 ):
     """v5.2.7: 查询当前身份 — 支持 access_token 或 agent_id+agent_key
@@ -4879,6 +4886,11 @@ def whoami(
 
     返回：supplier_id + company_name + agent_id + 注册时间 + mcp_endpoint
     """
+    # v5.3.1: 优先从 Header 读取（避免 token 进入访问日志/Referer）
+    access_token = request.headers.get("X-Access-Token", "") or access_token
+    agent_id = request.headers.get("X-Agent-Id", "") or agent_id
+    agent_key = request.headers.get("X-Agent-Key", "") or agent_key
+
     if x_api_key not in _API_KEYS:
         raise HTTPException(status_code=401, detail="API Key 无效")
 
@@ -4962,7 +4974,8 @@ def lookup_supplier(
 
 
 @app.post("/recover_identity")
-def recover_identity(req: RecoverIdentityRequest):
+@limiter.limit("3/hour")
+def recover_identity(request: Request, req: RecoverIdentityRequest):
     """v5.2.7: 用手机号+邮箱找回 supplier_id 和 access_token + agent_id + agent_key
 
     解决卡点 3：长期记忆完全丢失时，工厂老板可用注册时的手机号+邮箱恢复身份。
@@ -5078,12 +5091,16 @@ def link_supplier_mcp(supplier_id: str, req: LinkMcpRequest):
         # 3. 可选：探测 MCP endpoint 可达性（best-effort，失败不阻塞）
         mcp_reachable = False
         probe_error = ""
-        try:
-            import urllib.request
-            r = urllib.request.urlopen(mcp_endpoint, timeout=5)
-            mcp_reachable = r.status == 200
-        except Exception as e:
-            probe_error = str(e)[:100]
+        if not _is_safe_mcp_url(mcp_endpoint):
+            probe_error = "Blocked: MCP endpoint points to internal network (SSRF protection)"
+            logger.warning(f"[SSRF] link_supplier_mcp blocked unsafe URL: {supplier_id} | {mcp_endpoint}")
+        else:
+            try:
+                import urllib.request
+                r = urllib.request.urlopen(mcp_endpoint, timeout=5)
+                mcp_reachable = r.status == 200
+            except Exception as e:
+                probe_error = str(e)[:100]
 
         # 4. 写入 endpoint + 激活 skill
         now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -5574,8 +5591,7 @@ def admin_reload_db(x_api_key: str = Header(None, alias="X-API-Key")):
         with get_db() as conn:
             row = conn.execute("SELECT COUNT(*) as cnt FROM suppliers").fetchone()
             before_count = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e: logger.warning(f"operation failed: {e}")
 
     # 强制重新导入
     try:
@@ -5593,8 +5609,7 @@ def admin_reload_db(x_api_key: str = Header(None, alias="X-API-Key")):
             after_count = row["cnt"] if row else 0
             row = conn.execute("SELECT COUNT(*) as cnt FROM products").fetchone()
             product_count = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e: logger.warning(f"operation failed: {e}")
 
     # 失效所有缓存
     _supplier_cache.invalidate("find:")
@@ -5879,8 +5894,7 @@ def bid_on_requirement(req: BidOnRequirementRequest, request: Request):
                     "status": "bid_submitted",
                 },
             )
-    except Exception:
-        pass
+    except Exception as e: logger.warning(f"operation failed: {e}")
 
     return {
         "bid_id": bid_id,
@@ -6031,7 +6045,7 @@ def leave_review(req: LeaveReviewRequest):
 @app.get("/health")
 def health_check():
     """简单健康检查端点（供 Docker healthcheck / 外部监控使用）"""
-    return {"status": "ok", "service": "linkmoney-api", "version": "5.2.1"}
+    return {"status": "ok", "service": "linkmoney-api", "version": "5.3.0"}
 
 
 # ===== 轻量访问统计 =====
@@ -6049,7 +6063,8 @@ async def track_visit(request: Request):
     """轻量访问统计端点（无需第三方服务）"""
     try:
         body = await request.json()
-    except Exception:
+    except Exception as e:
+        logger.debug(f"track_visit JSON parse failed: {e}")
         body = {}
     page = body.get("page", "unknown")
     lang = body.get("lang", "unknown")
@@ -6188,4 +6203,6 @@ if __name__ == "__main__":
     import uvicorn
 
     logger.info("LinkMoney MCP Server 启动中...")
-    uvicorn.run("server:app", host="0.0.0.0", port=8765, reload=True)
+    # v5.3.1: 生产环境禁用 reload（性能 + 安全），通过 LINKMONEY_DEV=1 开启
+    _dev_mode = os.getenv("LINKMONEY_DEV", "0") == "1"
+    uvicorn.run("server:app", host="0.0.0.0", port=8765, reload=_dev_mode)

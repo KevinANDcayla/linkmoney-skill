@@ -110,7 +110,7 @@ license: MIT
 | `get_inventory` | `GET /get_inventory` | `supplier_id`, `sku` | 查库存 |
 | `match_spec` | `GET /match_spec` | `spec`, `standard` | 规格匹配（DIN/ISO/ANSI/JIS/GB） |
 | `download_cert` | `GET /download_cert` | `supplier_id`, `cert_type` | 下载认证（ISO/CE/FDA/IATF） |
-| `multi_lang_inquiry` | `GET /multi_lang_inquiry` | `inquiry`, `target_lang` | 多语言询盘生成 |
+| `multi_lang_inquiry` | `POST /multi_lang_inquiry` | `inquiry_text`, `target_lang` | 多语言询盘生成 |
 | `get_supplier_contact` | `GET /get_supplier_contact` | `supplier_id` | 获取联系方式 |
 | `submit_rfq` | `POST /submit_rfq` | 见下方 | 提交询价单（自动邮件通知工厂） |
 
@@ -125,8 +125,8 @@ curl "https://linkmoney.online/find_china_supplier?category=fastener&spec=M8%203
 curl "https://linkmoney.online/get_pricing?supplier_id=SUPPLIER_ID&sku=SKU&quantity=50000" \
   -H "X-API-Key: lm-demo-2026"
 
-# 3. 提交 RFQ（必填 confirm_data_sharing=true）
-curl -X POST "https://linkmoney.online/submit_rfq" \
+# 3. 提交 RFQ（confirm_data_sharing 必须作为 query 参数传 true）
+curl -X POST "https://linkmoney.online/submit_rfq?confirm_data_sharing=true" \
   -H "X-API-Key: lm-demo-2026" \
   -H "Content-Type: application/json" \
   -d '{
@@ -134,7 +134,6 @@ curl -X POST "https://linkmoney.online/submit_rfq" \
     "product_sku": "SKU",
     "quantity": 50000,
     "delivery_port": "Ningbo",
-    "confirm_data_sharing": true,
     "contact_name": "John Smith",
     "contact_email": "john@buyer.com"
   }'

@@ -17,7 +17,7 @@
       "auth": "X-API-Key only"
     },
     "c_agent": {
-      "tools": ["evaluate_sme", "register_supplier", "update_products", "upload_products_csv", "get_my_rfqs", "send_quote", "bid_on_requirement"],
+      "tools": ["evaluate_sme", "register_supplier", "update_products", "upload_products_csv", "get_my_rfqs", "send_quote", "bid_on_requirement", "link_mcp", "unlink_mcp", "whoami", "lookup_supplier", "recover_identity"],
       "auth": "agent_id + agent_key (long-term memory) or access_token"
     }
   },
@@ -27,8 +27,8 @@
     {"name": "get_inventory", "description": "Get real-time inventory. Params: supplier_id, sku", "endpoint": "GET /get_inventory", "auth_required": true, "role": "w_agent"},
     {"name": "match_spec", "description": "Match specifications across standards (DIN/ISO/ANSI/JIS/GB)", "endpoint": "GET /match_spec", "auth_required": true, "role": "w_agent"},
     {"name": "download_cert", "description": "Download supplier certifications (ISO/CE/FDA/IATF)", "endpoint": "GET /download_cert", "auth_required": true, "role": "w_agent"},
-    {"name": "multi_lang_inquiry", "description": "Generate inquiries in 9 languages", "endpoint": "GET /multi_lang_inquiry", "auth_required": true, "role": "w_agent"},
-    {"name": "submit_rfq", "description": "Submit RFQ to supplier (auto-email notification). Params: supplier_id, product_sku, quantity, delivery_port, confirm_data_sharing, contact_name, contact_email", "endpoint": "POST /submit_rfq", "auth_required": true, "role": "w_agent"},
+    {"name": "multi_lang_inquiry", "description": "Generate inquiries in 9 languages. Params: inquiry_text, target_lang", "endpoint": "POST /multi_lang_inquiry", "auth_required": true, "role": "w_agent"},
+    {"name": "submit_rfq", "description": "Submit RFQ to supplier (auto-email notification). Params: supplier_id, product_sku, quantity, delivery_port, contact_name, contact_email. Query param: confirm_data_sharing=true (required)", "endpoint": "POST /submit_rfq", "auth_required": true, "role": "w_agent"},
     {"name": "get_supplier_contact", "description": "Get supplier contact info", "endpoint": "GET /get_supplier_contact", "auth_required": true, "role": "w_agent"},
     {"name": "evaluate_sme", "description": "5-dimension AI export readiness assessment for Chinese manufacturers", "endpoint": "POST /evaluate_sme", "auth_required": true, "role": "c_agent"},
     {"name": "register_supplier", "description": "Register Chinese factory (auto-activate hosted MCP). No API Key required. Rate limit 5/hour/IP. Required: company_name, category, email, phone. Returns supplier_id + access_token + agent_id + agent_key (store in long-term memory)", "endpoint": "POST /register_supplier", "auth_required": false, "role": "c_agent"},
@@ -36,7 +36,12 @@
     {"name": "upload_products_csv", "description": "CSV batch import products. Auth: agent_id + agent_key or access_token", "endpoint": "POST /suppliers/{id}/upload_csv", "auth_required": true, "role": "c_agent"},
     {"name": "get_my_rfqs", "description": "Factory queries received RFQs. Auth: agent_id + agent_key or access_token", "endpoint": "GET /get_my_rfqs", "auth_required": true, "role": "c_agent"},
     {"name": "send_quote", "description": "Supplier quotes on RFQ and emails buyer. Auth: agent_id + agent_key or access_token", "endpoint": "POST /send_quote", "auth_required": true, "role": "c_agent"},
-    {"name": "bid_on_requirement", "description": "Supplier bids on public requirement. Auth: agent_id + agent_key or access_token", "endpoint": "POST /bid_on_requirement", "auth_required": true, "role": "c_agent"}
+    {"name": "bid_on_requirement", "description": "Supplier bids on public requirement. Auth: agent_id + agent_key or access_token", "endpoint": "POST /bid_on_requirement", "auth_required": true, "role": "c_agent"},
+    {"name": "link_mcp", "description": "Factory links self-hosted MCP Server endpoint. Auth: agent_id + agent_key or access_token", "endpoint": "POST /suppliers/{id}/link_mcp", "auth_required": true, "role": "c_agent"},
+    {"name": "unlink_mcp", "description": "Factory unlinks MCP Server endpoint (revert to cached mode). Auth: agent_id + agent_key or access_token", "endpoint": "POST /suppliers/{id}/unlink_mcp", "auth_required": true, "role": "c_agent"},
+    {"name": "whoami", "description": "Query identity by agent_id + agent_key or access_token. No API Key required", "endpoint": "GET /whoami", "auth_required": false, "role": "c_agent"},
+    {"name": "lookup_supplier", "description": "Query supplier_id by company name or phone (no credentials returned). No API Key required", "endpoint": "GET /lookup_supplier", "auth_required": false, "role": "c_agent"},
+    {"name": "recover_identity", "description": "Recover identity by phone + email (old credentials revoked). Rate limit 3/hour/IP", "endpoint": "POST /recover_identity", "auth_required": false, "role": "c_agent"}
   ],
   "identity_endpoints": {
     "whoami": {

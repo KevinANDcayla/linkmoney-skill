@@ -28,9 +28,8 @@ services:
     networks:
       - linkmoney-net
     healthcheck:
-      # 首次 /agent/status 要等 bootstrap + 健康检查缓存填充（最多 ~30s 跑 14 个厂家），
-      # start_period: 60s 给充分时间，之后缓存命中 < 2ms，永远秒过
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/agent/status', timeout=8)"]
+      # v5.3.1: 改用 /health（公开端点，不依赖 API Key，避免 /agent/* 收紧鉴权后 healthcheck 失败）
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health', timeout=8)"]
       interval: 30s
       timeout: 10s
       retries: 5

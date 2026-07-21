@@ -24,8 +24,8 @@ import server
 
 client = TestClient(server.app)
 
-# 默认 API Key（见 server.py _load_api_keys）
-API_KEY = "lm-demo-2026"
+# API Key 从环境变量读取，默认用 demo key（仅测试用）
+API_KEY = os.environ.get("LINKMONEY_API_KEYS", "lm-demo-2026").split(",")[0]
 HEADERS = {"X-API-Key": API_KEY}
 
 results = []
