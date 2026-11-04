@@ -73,6 +73,20 @@ def _log_mail(to_email: str, subject: str, status: str, error_msg: str = "", mai
         pass  # 日志写入失败不影响邮件发送
 
 
+def _display_api_key() -> str:
+    """读取用于邮件「Agent 操作指引」展示的 API Key。
+
+    安全修复：不再兜底硬编码 key 名（原 lm-prod-2026-key1）。
+    未配置 LINKMONEY_API_KEYS 时显式告警并返回占位符，
+    避免向收件人泄露生产 key 名或渲染出无效的 curl 示例。
+    """
+    key = os.getenv("LINKMONEY_API_KEYS", "").split(",")[0].strip()
+    if not key:
+        logger.warning("LINKMONEY_API_KEYS 未配置，邮件中的 API Key 将显示为占位符")
+        return "<LINKMONEY_API_KEY>"
+    return key
+
+
 # 启动时初始化表
 _init_mail_logs_table()
 
@@ -152,7 +166,7 @@ class Mailer:
 
         # API base URL（给 Agent 操作指引用）
         base_url = os.getenv("LINKMONEY_BASE_URL", "https://linkmoney.online").rstrip("/")
-        api_key = os.getenv("LINKMONEY_API_KEYS", "lm-prod-2026-key1").split(",")[0].strip()
+        api_key = _display_api_key()
         supplier_id = supplier.get("id", "")
         rfq_id = rfq["id"]
 
@@ -241,7 +255,7 @@ class Mailer:
 
         # API base URL（给 Agent 查询指引用）
         base_url = os.getenv("LINKMONEY_BASE_URL", "https://linkmoney.online").rstrip("/")
-        api_key = os.getenv("LINKMONEY_API_KEYS", "lm-prod-2026-key1").split(",")[0].strip()
+        api_key = _display_api_key()
         rfq_id = rfq["id"]
 
         # 构建匹配工厂列表（最多 5 家）

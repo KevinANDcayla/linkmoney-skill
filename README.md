@@ -14,7 +14,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green"></a>
   <a href="https://linkmoney.online/mcp/manifest.json"><img src="https://img.shields.io/badge/MCP-43_tools-purple"></a>
   <a href="https://linkmoney.online/en"><img src="https://img.shields.io/badge/demo-live_online-brightgreen"></a>
-  <a href="#-middle-agent-v30"><img src="https://img.shields.io/badge/v5.0-2500_factories-blueviolet"></a>
+  <a href="#-middle-agent-v30"><img src="https://img.shields.io/badge/v5.0-73_verified-blueviolet"></a>
 </p>
 
 ---
@@ -22,7 +22,7 @@
 > **LinkMoney gives AI agents the ability to source products from real Chinese factories.**
 > Not an app. Not a website. Not a middleware. **It's an AI-native marketplace where agents do the sourcing.**
 
-> **v5.0 大规模数据扩充** — 2,500 家工厂 / 30,000 个产品 / 16 个品类。海外端永久免费。详见 [快速开始](#-quick-start)。
+> **数据规模（诚实口径）** — 73 家已验证工厂（verified）+ 2,700 家目录缓存（directory）/ 16 个品类。海外端永久免费。详见 [快速开始](#-quick-start)。
 
 ---
 
@@ -113,9 +113,9 @@ Overseas Buyer's AI Agent                 Chinese Factory's MCP Server
 ### Key Features
 
 - **43 MCP Tools** (v5.0) — search, compare, quote, negotiate, transact, audit, maintain, marketplace
-- **2,500 Verified Factories** — 30,000+ products across 16 categories, 833 with live MCP endpoints
+- **73 Verified Factories + 2,700 Directory Listings** — 16 categories; verified factories support live MCP queries
 - **Hybrid Architecture** — LinkMoney routes inquiries; factories serve live data from their own MCP servers
-- **Real-time Data** — pricing and inventory straight from factory ERP, not stale listings
+- **Real-time Where It Matters** — verified factories serve live MCP data; directory listings return cached profiles
 - **9-Language Support** — auto-translate inquiries (EN/ZH/JA/DE/ES/FR/AR/PT/RU)
 - **Email Notifications** — SMTP email for RFQ submissions and quote responses
 - **Zero-code Onboarding** — factories upload CSV or edit JSON; 5 minutes to go live
